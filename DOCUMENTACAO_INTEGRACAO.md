@@ -83,15 +83,29 @@ Para tornar a solução de monitoramento barata e viável comercialmente para pe
 
 ---
 
-## 📦 5. Instalador de Primeiro Acesso (Bootstrap)
+## 📦 5. Instalador de Primeiro Acesso (Bootstrap e Script Um-Clique)
 
-O script `bootstrap_installer.py` foi projetado para atuar como o instalador "zero-dependency" do sistema. Ao iniciar uma placa Radxa limpa (contendo apenas o Python 3 e o Docker daemon):
+Para que a instalação e configuração na placa Radxa Cubie A7A nova exijam a **mínima interação possível** do técnico de campo, criamos duas alternativas de deploy simplificado:
 
-1. O técnico executa `python bootstrap_installer.py` na placa.
-2. Um servidor web leve é exposto localmente na porta **`8080`**.
-3. A interface web checa a presença do Docker daemon, do plugin Docker Compose e a conectividade com os servidores do Docker Hub.
-4. **Login Opcional:** Caso as imagens docker do VisionCam estejam públicas, o campo de usuário e senha no console web pode ser deixado em branco. O script pulará o `docker login` e baixará as imagens diretamente.
-5. O script gera os arquivos de configuração local (`docker-compose.yml` e `frigate_config.yml` padrão) se ausentes, faz o pull das imagens e inicializa os contêineres em segundo plano, reportando os logs na tela do navegador em tempo real.
+### Método A: Instalação Automática via Terminal (Recomendado — Um Clique)
+O técnico só precisa ligar a placa, abrir o terminal do Radxa e rodar o comando abaixo (que baixa e executa o script [install.sh](file:///c:/Sistemas/Gemini/VisionCam/EdgeAI/install.sh) diretamente do seu GitHub público):
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/raraujoR87/EdgeVisionCam/main/install.sh | bash
+```
+
+**O que o script faz sozinho:**
+1. Atualiza os repositórios Linux e instala dependências (`git`, `curl`, `python3`).
+2. Instala o Docker Engine e o plugin Docker Compose se estiverem ausentes.
+3. Garante permissão do usuário atual no grupo do Docker.
+4. Clona o repositório do seu GitHub na pasta home do usuário.
+5. Inicia o instalador no modo de deploy silencioso/automático (`python3 bootstrap_installer.py --auto`) que gera as configurações locais padrão, faz o pull das imagens públicas e inicia toda a stack de contêineres em segundo plano.
+
+### Método B: Setup Gráfico Assistido (Porta 8080)
+Caso precise de interface visual ou passar credenciais privadas do Docker Hub:
+1. O técnico executa `python3 bootstrap_installer.py` na placa.
+2. Abre o navegador na porta **`8080`** (`http://<IP_DO_RADXA>:8080`).
+3. O painel verifica as dependências e permite acompanhar os logs de download e inicialização da stack na tela em tempo real.
 
 ---
 
