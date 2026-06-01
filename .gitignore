@@ -1,0 +1,49 @@
+# Virtual Environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local SQLite databases and directories
+core/database/data/
+*.db
+*.db-journal
+*.db-wal
+
+# Storage & temporary files
+edge/storage/events/*
+!edge/storage/events/.gitkeep
+storage/
+*.log
+scratch/
+test_run.log
+core_agent_e2e.log
+
+# YOLO weights & models
+*.pt
+
+# Node.js (UI Dashboard)
+ui/node_modules/
+ui/.next/
+ui/out/
+ui/build/
+ui/.env.local
+ui/.env.development.local
+ui/.env.preview.local
+ui/.env.production.local
+ui/npm-debug.log*
+ui/yarn-debug.log*
+ui/yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db

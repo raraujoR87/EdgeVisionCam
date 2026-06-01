@@ -1,0 +1,631 @@
+"""
+AGENTE LOCAL INTELIGENTE — LangGraph + Analise de Intencao por Pose
+Anti-furto para pequenos estabelecimentos
+
+Arquitetura de 3 camadas:
+  Camada 1: YOLO26 (vision_engine.py) -> eventos tipados
+  Camada 2: Este agente (LangGraph + PoseIntent) -> analise de intencao
+  Camada 3: Gemini (agent.py) -> confirmacao final
+
+Deteccao de intencao por geometria corporal:
+  - Pulso proximo ao torso quando produto some = ocultacao
+  - Produto movendo em direcao ao corpo = intencao de esconder
+  - Bracos cruzando regiao do torso = gesto de guardar
+  - Pessoa olhando ao redor + gesto = furto provavel
+
+Estados do grafo:
+  IDLE -> TRACKING -> ANALYZING -> SUSPICIOUS -> AWAITING_GEMINI
+                   -> CLEARED <-
+"""
+
+import os
+import sys
+import json
+import time
+import math
+import asyncio
+import threading
+import collections
+import cv2
+import numpy as np
+from typing import Dict, Any, Optional, List, Tuple
+from dataclasses import dataclass, field
+from enum import Enum
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from core.database.db import get_queue_db
+
+EVENT_STORAGE = os.path.join(os.path.dirname(__file__), 'storage', 'events')
+os.makedirs(EVENT_STORAGE, exist_ok=True)
+GONE_TIMEOUT = 20.0  # Must match vision_engine.py
+BATCH_DELAY  = 3.0   # Seconds to wait for additional products before escalating
+from datetime import datetime
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Event Types (emitted by YOLO26 vision engine)
+# ═══════════════════════════════════════════════════════════════════
+
+class EventType(Enum):
+    PICKUP = "PICKUP"           # Person picked up a product
+    MISSING = "MISSING"         # Product disappeared from scene for 20s+
+    REAPPEAR = "REAPPEAR"       # Product reappeared in scene
+    PERSON_LEFT = "PERSON_LEFT" # Person left monitored zone
+    PERSON_EXIT = "PERSON_EXIT" # Person exited frame (left/right)
+
+
+@dataclass
+class VisionEvent:
+    type: EventType
+    pid: int
+    cls_name: str
+    timestamp: float
+    frame: Optional[np.ndarray] = None
+    score: float = 0.0
+    evidence: list = field(default_factory=list)
+    # Pose data at the moment of the event (for intent analysis)
+    kpts: Optional[Dict[str, Tuple[float, float]]] = None
+    product_last_pos: Optional[Tuple[float, float]] = None
+    person_bbox: Optional[Tuple[int, int, int, int]] = None
+    wrist_history: Optional[List] = None
+    product_trajectory: Optional[List] = None
+    frame_shape: Optional[Tuple[int, int]] = None
+    head_scanning: bool = False
+    disappearance_ring_len: int = 0
+    pickup_time: float = 0.0  # When first product was picked up
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Pose Intent Analyzer — Zero-cost, runs in microseconds
+# Uses YOLO26 pose keypoints to detect concealment gestures
+# ═══════════════════════════════════════════════════════════════════
+
+def _dist(a, b):
+    """Euclidean distance between two points."""
+    if not a or not b or a[0] <= 0 or b[0] <= 0:
+        return 9999
+    return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2)
+
+
+def _valid(pt):
+    """Check if a keypoint is valid (detected)."""
+    return pt and pt[0] > 0 and pt[1] > 0
+
+
+class PoseIntentAnalyzer:
+    """
+    Advanced intent analysis using YOLO26 pose keypoints + product trajectory.
+    
+    9 intelligence signals:
+    POSITIVE: trajectory toward body, velocity spike, wrist convergence,
+              wrist-in-torso, product near torso, arm crossing, head scanning,
+              person left
+    NEGATIVE: product at frame edge, wrists away from body, slow movement,
+              product moving away from body
+    """
+
+    def analyze(self, event: 'VisionEvent') -> Dict[str, Any]:
+        kpts = event.kpts
+        if not kpts:
+            return self._result(0.0, ["Sem dados de pose"])
+
+        ls = kpts.get('ls', (0,0)); rs = kpts.get('rs', (0,0))
+        lh = kpts.get('lh', (0,0)); rh = kpts.get('rh', (0,0))
+        lw = kpts.get('lw', (0,0)); rw = kpts.get('rw', (0,0))
+        le = kpts.get('le', (0,0)); re = kpts.get('re', (0,0))
+
+        if not (_valid(ls) and _valid(rs)):
+            return self._result(0.0, ["Ombros nao detectados"])
+
+        # ── TORSO GEOMETRY ──
+        torso_cx = (ls[0] + rs[0]) / 2
+        sw = _dist(ls, rs)
+        if sw < 10:
+            return self._result(0.0, ["Dados ruidosos"])
+        if _valid(lh) and _valid(rh):
+            torso_cy = (ls[1] + rs[1] + lh[1] + rh[1]) / 4
+            torso_h = abs((lh[1]+rh[1])/2 - (ls[1]+rs[1])/2)
+        else:
+            torso_cy = (ls[1] + rs[1]) / 2 + sw * 0.8
+            torso_h = sw * 1.5
+        zw = sw * 0.8; zh = torso_h * 1.2
+
+        score = 0.0
+        pos_r = []  # positive reasons
+        neg_r = []  # negative reasons
+
+        # ═══ 1. PRODUCT TRAJECTORY DIRECTION ═══
+        traj = event.product_trajectory
+        prod_pos = event.product_last_pos
+        if traj and len(traj) >= 3 and _valid(prod_pos):
+            start = traj[-min(len(traj), 5)]
+            end = traj[-1]
+            if _valid(start) and _valid(end):
+                dx, dy = end[0]-start[0], end[1]-start[1]
+                to_body_x, to_body_y = torso_cx-end[0], torso_cy-end[1]
+                dot = dx*to_body_x + dy*to_body_y
+                if dot > 0:
+                    score += 0.20
+                    pos_r.append("Produto se movia EM DIRECAO ao corpo")
+                else:
+                    score -= 0.10
+                    neg_r.append("Produto se movia PARA LONGE do corpo")
+
+        # ═══ 2. PRODUCT AT FRAME EDGE (false positive) ═══
+        fs = event.frame_shape
+        if _valid(prod_pos) and fs:
+            h, w = fs
+            m = 40
+            if prod_pos[0] < m or prod_pos[0] > w-m or prod_pos[1] < m or prod_pos[1] > h-m:
+                score -= 0.15
+                neg_r.append("Produto sumiu na BORDA do frame (saiu do FOV)")
+
+        # ═══ 3. WRIST VELOCITY SPIKE ═══
+        wh = event.wrist_history
+        if wh and len(wh) >= 4:
+            vels = []
+            for i in range(1, len(wh)):
+                for pw, cw in [(wh[i-1][0], wh[i][0]), (wh[i-1][1], wh[i][1])]:
+                    if _valid(pw) and _valid(cw):
+                        vels.append(math.sqrt((cw[0]-pw[0])**2 + (cw[1]-pw[1])**2))
+            if vels:
+                avg_v = sum(vels)/len(vels)
+                max_v = max(vels)
+                norm_max_v = max_v / sw if sw > 0 else 0
+                if avg_v > 0 and max_v > avg_v*2.5 and (max_v > 15 or norm_max_v > 0.15):
+                    score += 0.15
+                    pos_r.append(f"Movimento brusco de ocultacao (vel={max_v:.0f}px, ratio={norm_max_v:.2f})")
+                elif max_v < 5:
+                    neg_r.append("Sem movimento brusco")
+
+        # ═══ 4. MULTI-FRAME WRIST CONVERGENCE ═══
+        if wh and len(wh) >= 3:
+            recent = wh[-min(len(wh), 5):]
+            conv, total = 0, 0
+            for i in range(1, len(recent)):
+                for side, prev_w, curr_w in [('L', recent[i-1][0], recent[i][0]),
+                                              ('R', recent[i-1][1], recent[i][1])]:
+                    if _valid(prev_w) and _valid(curr_w):
+                        total += 1
+                        if side == 'L' and curr_w[0] > prev_w[0] and abs(curr_w[0]-torso_cx) < zw:
+                            conv += 1
+                        elif side == 'R' and curr_w[0] < prev_w[0] and abs(curr_w[0]-torso_cx) < zw:
+                            conv += 1
+            if total > 0:
+                r = conv/total
+                if r >= 0.6:
+                    score += 0.20
+                    pos_r.append(f"Pulsos CONVERGINDO ({r:.0%})")
+                elif r <= 0.2:
+                    neg_r.append("Pulsos nao convergem")
+
+        # ═══ 5. WRIST-IN-TORSO ═══
+        wit = 0
+        for wn, wr in [('esq', lw), ('dir', rw)]:
+            if _valid(wr):
+                if abs(wr[0]-torso_cx) < zw/2 and abs(wr[1]-torso_cy) < zh/2:
+                    wit += 1
+                else:
+                    d = _dist(wr, (torso_cx, torso_cy))
+                    if d > sw * 1.2:
+                        neg_r.append(f"Pulso {wn} LONGE do corpo ({d:.0f}px)")
+        if wit >= 2:
+            score += 0.30; pos_r.append("AMBOS pulsos no torso")
+        elif wit == 1:
+            score += 0.15; pos_r.append("Um pulso na regiao do torso")
+
+        # ═══ 6. PRODUCT NEAR TORSO ═══
+        if _valid(prod_pos):
+            dt = _dist(prod_pos, (torso_cx, torso_cy))
+            if dt < sw*0.5:
+                score += 0.20; pos_r.append(f"Produto COLADO ao torso ({dt:.0f}px)")
+            elif dt < sw*0.8:
+                score += 0.10; pos_r.append(f"Produto proximo ao corpo ({dt:.0f}px)")
+            elif dt > sw*1.5:
+                score -= 0.10; neg_r.append(f"Produto longe do corpo ({dt:.0f}px)")
+
+        # ═══ 7. ARM CROSSING ═══
+        if _valid(le) and _valid(re):
+            if (le[0] > torso_cx and re[0] < torso_cx) and wit > 0:
+                score += 0.10; pos_r.append("Bracos cruzados sobre torso")
+
+        # ═══ 8. HEAD SCANNING CORRELATION ═══
+        if event.head_scanning:
+            if score > 0.15:
+                score += 0.15; pos_r.append("Vigilancia + gesto suspeito")
+            else:
+                neg_r.append("Vigilancia sem gesto de ocultacao")
+
+        # ═══ 9. PERSON LEFT ═══
+        if event.type == EventType.PERSON_LEFT:
+            score += 0.30; pos_r.append("Pessoa SAIU com produto")
+
+        # ═══ 10. POCKET PROXIMITY (NOVO) ═══
+        hip_prox = False
+        for side, hand, hip in [('L', lw, lh), ('R', rw, rh)]:
+            if _valid(hand) and _valid(hip):
+                hd = _dist(hand, hip)
+                ratio = hd / sw
+                if ratio < 0.70:
+                    hip_prox = True
+                    pos_r.append(f"Mao {side} proxima ao bolso/quadril (ratio: {ratio:.2f})")
+        if hip_prox:
+            score += 0.25
+
+        # ═══ 11. BODY ROTATION / FACE-AWAY OCCLUSION (NOVO) ═══
+        nose = kpts.get('nose', (0,0))
+        if not _valid(nose):
+            score += 0.15
+            pos_r.append("Corpo virado de costas/perfil (possivel oclusao)")
+
+        score = max(0.0, min(1.0, score))
+        return self._result(score, pos_r + neg_r)
+
+    def _result(self, score, reasons, risk=None):
+        if risk is None:
+            risk = "none" if score < 0.10 else "low" if score < 0.25 else "medium" if score < 0.40 else "high"
+        return {
+            "intent_score": round(score, 2),
+            "risk_level": risk,
+            "concealment_gesture": score >= 0.30,
+            "reasons": reasons,
+            "method": "pose_analysis_v2"
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LangGraph-style State Machine
+# ═══════════════════════════════════════════════════════════════════
+
+class AgentState(Enum):
+    IDLE = "IDLE"
+    TRACKING = "TRACKING"
+    ANALYZING = "ANALYZING"
+    CLEARED = "CLEARED"
+    SUSPICIOUS = "SUSPICIOUS"
+    AWAITING_GEMINI = "AWAITING_GEMINI"
+    THEFT_CONFIRMED = "THEFT_CONFIRMED"
+
+
+@dataclass
+class PersonState:
+    """State for one tracked person in the graph."""
+    pid: int
+    state: AgentState = AgentState.IDLE
+    tracked_products: dict = field(default_factory=dict)
+    intent_analysis: Optional[Dict] = None
+    score: float = 0.0
+    evidence: list = field(default_factory=list)
+    last_event_frame: Optional[np.ndarray] = None
+    created_at: float = field(default_factory=time.time)
+    # Batching: accumulate multiple MISSING products before escalating
+    missing_batch: list = field(default_factory=list)  # list of (event, intent_result)
+    batch_timer_task: Optional[Any] = None
+
+
+class LocalAgent:
+    """
+    LangGraph-style agent for local anti-theft analysis.
+
+    Uses PoseIntentAnalyzer (geometry, not ML) to detect concealment gestures.
+    Runs in microseconds, zero RAM overhead, works on any hardware.
+
+    Graph transitions:
+      IDLE      + PICKUP      -> TRACKING
+      TRACKING  + MISSING     -> ANALYZING (runs pose intent)
+      TRACKING  + REAPPEAR    -> IDLE
+      TRACKING  + PERSON_LEFT -> ANALYZING (runs pose intent)
+      ANALYZING + intent:none -> CLEARED -> IDLE (no Gemini!)
+      ANALYZING + intent:high -> SUSPICIOUS -> AWAITING_GEMINI
+    """
+
+    # Minimum intent score to escalate to Gemini
+    INTENT_THRESHOLD = 0.25
+
+    def __init__(self, cam_ring, cam_ring_lock, cam_fps_ref):
+        self.persons: Dict[int, PersonState] = {}
+        self.intent_analyzer = PoseIntentAnalyzer()
+        self.event_queue: asyncio.Queue = asyncio.Queue()
+        self.audit = collections.deque(maxlen=20)
+        self._cam_ring = cam_ring
+        self._cam_ring_lock = cam_ring_lock
+        self._cam_fps_ref = cam_fps_ref
+
+    def log(self, msg):
+        entry = f"[{time.strftime('%H:%M:%S')}] {msg}"
+        self.audit.append(entry)
+        print(f"  [AGENTE] {msg}")
+
+    def _person(self, pid: int) -> PersonState:
+        if pid not in self.persons:
+            self.persons[pid] = PersonState(pid=pid)
+        return self.persons[pid]
+
+    async def process_event(self, event: VisionEvent):
+        """Process a vision event through the state graph."""
+        ps = self._person(event.pid)
+
+        if event.type == EventType.PICKUP:
+            ps.tracked_products[event.cls_name] = event.timestamp
+            if ps.state in (AgentState.IDLE, AgentState.CLEARED):
+                ps.state = AgentState.TRACKING
+                self.log(f"P_{event.pid}: IDLE -> TRACKING [{event.cls_name}]")
+            elif ps.state == AgentState.TRACKING:
+                self.log(f"P_{event.pid}: +produto [{event.cls_name}] (rastreando: {list(ps.tracked_products.keys())})")
+            else:
+                self.log(f"P_{event.pid}: +produto [{event.cls_name}] durante estado {ps.state.value} (rastreando: {list(ps.tracked_products.keys())})")
+
+        elif event.type == EventType.REAPPEAR:
+            ps.tracked_products.pop(event.cls_name, None)
+            if not ps.tracked_products:
+                ps.state = AgentState.IDLE
+                self.log(f"P_{event.pid}: -> IDLE (produto reapareceu)")
+            else:
+                ps.state = AgentState.TRACKING
+                self.log(f"P_{event.pid}: [{event.cls_name}] reapareceu, rastreando {list(ps.tracked_products.keys())}")
+
+        elif event.type == EventType.MISSING:
+            prev = ps.state.value
+            ps.state = AgentState.ANALYZING
+            ps.last_event_frame = event.frame
+            ps.score = max(ps.score, event.score)
+            ps.evidence = list(event.evidence)
+            self.log(f"P_{event.pid}: {prev} -> ANALYZING [{event.cls_name}]")
+            
+            # Analyze intent for this product
+            result = self.intent_analyzer.analyze(event)
+            intent_score = result["intent_score"]
+            risk = result["risk_level"]
+            self.log(f"P_{ps.pid}: Intencao={intent_score:.2f} risco={risk}")
+            for r in result.get("reasons", [])[:3]:
+                self.log(f"  -> {r}")
+            
+            if intent_score >= self.INTENT_THRESHOLD:
+                # Add to batch instead of immediate escalation
+                ps.missing_batch.append((event, result))
+                self.log(f"P_{ps.pid}: Produto [{event.cls_name}] adicionado ao batch ({len(ps.missing_batch)} produtos)")
+                
+                # Start batch timer if not already running
+                if ps.batch_timer_task is None or ps.batch_timer_task.done():
+                    ps.batch_timer_task = asyncio.create_task(self._batch_escalate(ps))
+            else:
+                self.log(f"P_{ps.pid}: [{event.cls_name}] CLEARED — sem gesto de ocultacao")
+                # Don't clear state if there are other products still batching
+                if not ps.missing_batch:
+                    ps.tracked_products.pop(event.cls_name, None)
+                    if not ps.tracked_products:
+                        ps.state = AgentState.IDLE
+
+        elif event.type == EventType.PERSON_LEFT:
+            if ps.state in (AgentState.TRACKING, AgentState.IDLE):
+                ps.state = AgentState.ANALYZING
+                ps.last_event_frame = event.frame
+                ps.score = max(event.score, 0.50)
+                ps.evidence = list(event.evidence)
+                self.log(f"P_{event.pid}: PERSON_LEFT com {list(ps.tracked_products.keys())}")
+                self._analyze_intent(ps, event)
+
+        elif event.type == EventType.PERSON_EXIT:
+            direction = event.cls_name  # direction is 'left' or 'right'
+            self.log(f"P_{event.pid}: Evento PERSON_EXIT recebido pela {direction.upper()}")
+            try:
+                db = await get_queue_db()
+                payload = json.dumps({
+                    "type": "PERSON_EXIT",
+                    "p_id": int(event.pid),
+                    "direction": direction
+                })
+                await db.execute(
+                    "INSERT INTO events (timestamp, video_path, payload_json, status) VALUES (?,?,?,?)",
+                    (time.time(), "", payload, 'PENDING_EXIT'))
+                await db.commit()
+                await db.close()
+                self.log(f"P_{event.pid}: Saída gravada no banco como PENDING_EXIT")
+            except Exception as e:
+                self.log(f"P_{event.pid}: Erro ao gravar saída no banco: {e}")
+
+    async def _batch_escalate(self, ps: PersonState):
+        """Wait for BATCH_DELAY seconds to collect more products, then escalate all at once."""
+        await asyncio.sleep(BATCH_DELAY)
+        
+        if not ps.missing_batch:
+            return
+        
+        product_names = [evt.cls_name for evt, _ in ps.missing_batch]
+        self.log(f"P_{ps.pid}: Batch completo com {len(ps.missing_batch)} produto(s): {product_names}")
+        
+        # Use the first event as the primary (for video timing), but merge all data
+        primary_event, primary_intent = ps.missing_batch[0]
+        
+        # Merge all intent results
+        all_reasons = []
+        max_intent = 0.0
+        for evt, intent_r in ps.missing_batch:
+            max_intent = max(max_intent, intent_r.get("intent_score", 0))
+            all_reasons.extend(intent_r.get("reasons", []))
+        
+        merged_intent = {
+            "intent_score": max_intent,
+            "risk_level": "high" if max_intent >= 0.40 else "medium" if max_intent >= 0.25 else "low",
+            "concealment_gesture": max_intent >= 0.30,
+            "reasons": list(dict.fromkeys(all_reasons)),  # deduplicate preserving order
+            "products": product_names,
+        }
+        
+        ps.state = AgentState.SUSPICIOUS
+        self.log(f"P_{ps.pid}: SUSPICIOUS (batch={len(ps.missing_batch)}, intencao={max_intent:.2f}) -> Gemini")
+        
+        # Escalate with all products in a single call
+        await self._escalate_to_gemini(ps, primary_event, merged_intent)
+        
+        # Clear batch
+        ps.missing_batch.clear()
+        ps.batch_timer_task = None
+
+    def _analyze_intent(self, ps: PersonState, event: VisionEvent):
+        """Analyze pose intent (instant, no async needed)."""
+        result = self.intent_analyzer.analyze(event)
+        ps.intent_analysis = result
+
+        intent_score = result["intent_score"]
+        risk = result["risk_level"]
+        reasons = result.get("reasons", [])
+
+        self.log(f"P_{ps.pid}: Intencao={intent_score:.2f} risco={risk}")
+        for r in reasons[:3]:
+            self.log(f"  -> {r}")
+
+        if intent_score >= self.INTENT_THRESHOLD:
+            ps.state = AgentState.SUSPICIOUS
+            self.log(f"P_{ps.pid}: SUSPICIOUS (intencao={intent_score:.2f}) -> Gemini")
+            # Schedule escalation (needs async)
+            asyncio.create_task(self._escalate_to_gemini(ps, event, result))
+        else:
+            ps.state = AgentState.CLEARED
+            self.log(f"P_{ps.pid}: CLEARED — sem gesto de ocultacao para [{event.cls_name}]")
+            ps.tracked_products.pop(event.cls_name, None)
+            if ps.tracked_products:
+                ps.state = AgentState.TRACKING
+                self.log(f"P_{ps.pid}: Retornando para TRACKING com produtos restantes: {list(ps.tracked_products.keys())}")
+            else:
+                ps.state = AgentState.IDLE
+                self.log(f"P_{ps.pid}: Retornando para IDLE")
+
+    async def _escalate_to_gemini(self, ps: PersonState, event: VisionEvent,
+                                   intent_result: Dict):
+        """Save video from pickup to now (entire trajectory) for Gemini."""
+        ps.state = AgentState.AWAITING_GEMINI
+
+        fps = self._cam_fps_ref()
+        fps_int = max(5, int(fps))
+
+        with self._cam_ring_lock:
+            all_frames = list(self._cam_ring)
+
+        # Add list of products involved
+        products_in_event = intent_result.get("products", [event.cls_name])
+
+        if len(all_frames) < fps_int * 3:
+            self.log(f"P_{ps.pid}: Buffer insuficiente ({len(all_frames)} frames)")
+            for p_name in products_in_event:
+                ps.tracked_products.pop(p_name, None)
+            ps.state = AgentState.TRACKING if ps.tracked_products else AgentState.IDLE
+            return
+
+        # ── VIDEO: FROM PICKUP TO NOW (entire trajectory) ──
+        # pickup_time = when first product was picked up
+        # We want: 5s BEFORE pickup → current moment
+        now = time.time()
+        pickup_t = event.pickup_time
+        secs_since_pickup = now - pickup_t if pickup_t > 0 else 30
+        secs_to_capture = min(secs_since_pickup + 5, 55)  # +5s padding before, max 55s
+
+        frames_needed = int(secs_to_capture * fps_int)
+        start_idx = max(0, len(all_frames) - frames_needed)
+        frames_to_save = all_frames[start_idx:]
+
+        # Calculate where key events are in the video
+        pickup_sec = max(0, secs_to_capture - secs_since_pickup)
+        disappear_sec = secs_to_capture - (GONE_TIMEOUT if secs_since_pickup > GONE_TIMEOUT else 0)
+
+        ts = int(now)
+        fname = f"event_{ts}_p{ps.pid}.mp4"
+        vpath = os.path.join(EVENT_STORAGE, fname)
+        duration = len(frames_to_save) / fps_int
+
+        self.log(f"P_{ps.pid}: Video: pickup={pickup_sec:.0f}s, desapareceu={disappear_sec:.0f}s, total={duration:.0f}s")
+
+        # ── ESCRITA DE VÍDEO ASSÍNCRONA (Não bloqueia a thread de detecção) ──
+        h, w = frames_to_save[0].shape[:2]
+        def write_video_file(path, frames, fps, size):
+            out = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+            for f in frames:
+                out.write(f)
+            out.release()
+
+        try:
+            await asyncio.to_thread(write_video_file, vpath, frames_to_save, fps_int, (w, h))
+            self.log(f"P_{ps.pid}: Video salvo assincronamente: {fname} ({len(frames_to_save)}f, {duration:.0f}s)")
+        except Exception as err:
+            self.log(f"P_{ps.pid}: ERRO ao salvar video assincronamente: {err}")
+
+        # Build evidence report
+        now = time.time()
+        report_lines = [f"Duracao do video: {duration:.0f}s | Score: {ps.score:.2f}"]
+        for t, desc, d in ps.evidence:
+            secs_ago = now - t
+            video_sec = max(0, duration - secs_ago)
+            report_lines.append(f"  [video {video_sec:5.1f}s] {desc} ({'+' if d >= 0 else ''}{d:.2f})")
+
+        # Add intent analysis
+        report_lines.append(f"\nANALISE DE INTENCAO (Agente Local - Pose):")
+        report_lines.append(f"  Score de intencao: {intent_result.get('intent_score', 0):.2f}")
+        report_lines.append(f"  Gesto de ocultacao: {'SIM' if intent_result.get('concealment_gesture') else 'NAO'}")
+        for r in intent_result.get("reasons", []):
+            report_lines.append(f"  - {r}")
+
+        report_lines.append(f"\nPRODUTOS ENVOLVIDOS: {', '.join(products_in_event)}")
+
+        report = "\n".join(report_lines)
+
+        # Generate audit datetime (local timezone)
+        event_dt = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+        # Register event for Gemini
+        try:
+            db = await get_queue_db()
+            payload = json.dumps({
+                "type": "Behavioral_Theft",
+                "p_id": int(ps.pid),
+                "suspicion_score": round(float(ps.score), 2),
+                "evidence_report": report,
+                "video_duration_s": round(float(duration), 1),
+                "event_datetime": event_dt,
+                "products": products_in_event,
+                "intent_analysis": {
+                    "intent_score": intent_result.get("intent_score", 0),
+                    "risk_level": intent_result.get("risk_level", "unknown"),
+                    "concealment_gesture": intent_result.get("concealment_gesture", False),
+                    "reasons": intent_result.get("reasons", []),
+                },
+                "agent_state": "SUSPICIOUS"
+            })
+            await db.execute(
+                "INSERT INTO events (timestamp, video_path, payload_json, status) VALUES (?,?,?,?)",
+                (ts, fname, payload, 'PENDING'))
+            await db.commit()
+            await db.close()
+            self.log(f"P_{ps.pid}: Evento registrado -> Gemini")
+        except Exception as e:
+            self.log(f"P_{ps.pid}: ERRO ao registrar evento: {e}")
+
+        # Limpeza seletiva dos produtos escalados
+        for p_name in products_in_event:
+            ps.tracked_products.pop(p_name, None)
+        
+        if ps.tracked_products:
+            ps.state = AgentState.TRACKING
+            self.log(f"P_{ps.pid}: Retornando para TRACKING com produtos restantes: {list(ps.tracked_products.keys())}")
+        else:
+            ps.state = AgentState.IDLE
+            self.log(f"P_{ps.pid}: Retornando para IDLE")
+
+    async def run(self):
+        """Main event loop."""
+        print("  [AGENTE] Agente Local iniciado (PoseIntent + LangGraph)")
+        print(f"  [AGENTE] Threshold de intencao: {self.INTENT_THRESHOLD}")
+        print(f"  [AGENTE] Abaixo do threshold = CLEARED (sem Gemini)")
+        while True:
+            try:
+                event = await asyncio.wait_for(self.event_queue.get(), timeout=1.0)
+                await self.process_event(event)
+            except asyncio.TimeoutError:
+                now = time.time()
+                for pid in list(self.persons.keys()):
+                    ps = self.persons[pid]
+                    if ps.state == AgentState.IDLE and now - ps.created_at > 60:
+                        del self.persons[pid]
+            except Exception as e:
+                print(f"  [AGENTE ERRO] {e}")
+                import traceback; traceback.print_exc()
+                await asyncio.sleep(1)
