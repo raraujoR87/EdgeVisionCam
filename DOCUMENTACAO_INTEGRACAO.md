@@ -39,7 +39,7 @@ graph TD
 ```
 
 ### Componentes Locais:
-* **Frigate NVR (`:5000`):** Captura os fluxos RTSP, realiza detecção de movimento e pessoas com aceleração Rockchip NPU e grava clipes locais.
+* **Frigate NVR (`:5000`):** Captura os fluxos RTSP, realiza detecção de movimento e pessoas com aceleração Vivante VIP9000 NPU e grava clipes locais.
 * **Mosquitto MQTT (`:1883`):** Mensageria instantânea de telemetria e eventos entre o Frigate e o VisionCam.
 * **VisionCam Core (`:8000` / `:8090`):** Contêiner unificado que agrupa a API FastAPI, o módulo YOLO-Pose e o agente cognitivo LangGraph.
 * **VisionCam UI (`:3000`):** Interface Next.js local restrita a calibradores e técnicos de suporte.
@@ -161,3 +161,20 @@ Para permitir a gestão, monitoramento e execução de comandos diretamente da p
   * `/config` : Lista e altera configurações de chaves e valores diretamente na tabela `config` da SQLite local.
   * `/zones` : Retorna a lista detalhada e estado das zonas de guarda calibradas.
   * `/exec <comando>` : Executa um comando terminal livre no host e retorna a saída formatada de logs (restrito apenas ao chat ID administrador autorizado).
+
+---
+
+## 🧠 9. Aceleração de Hardware NPU (Vivante VIP9000)
+
+O Radxa Cubie A7A é equipado com o SoC Allwinner A733, que possui um NPU **Vivante VIP9000** de 3 TOPS. Para tirar proveito máximo de desempenho e liberar a CPU, os modelos YOLO devem rodar neste NPU.
+
+### A. Fluxo de Compilação do Modelo (.pt -> .nbg)
+Para converter o modelo PyTorch (.pt) para o formato do NPU (.nbg - Network Binary Graph), criamos os scripts na pasta [npu_compilation/](file:///c:/Sistemas/Gemini/VisionCam/EdgeAI/npu_compilation):
+1. **`prepare_calibration.py`**: Baixa imagens de exemplo e gera o arquivo `calibrate_dataset.txt` para calibrar o modelo durante a quantização.
+2. **`acuity_export_yolo.sh`**: Script para ser rodado dentro do contêiner Docker **Acuity Pegasus** (fornecido pela Radxa). Ele importa o modelo ONNX, realiza a **quantização INT8** e exporta o arquivo `.nbg` compilado para o VIP9000.
+
+### B. Execução na Placa
+No código do VisionCam, implementamos o módulo [vivante_pose_engine.py](file:///c:/Sistemas/Gemini/VisionCam/EdgeAI/edge/vivante_pose_engine.py).
+* Ele lê as variáveis de ambiente `POSE_MODEL_PATH` e `OBJ_MODEL_PATH`.
+* Se o caminho apontar para um arquivo `.nbg` (ex: `yolo26n-pose.nbg`), ele carrega a biblioteca do driver **`timvx`** do Radxa para processar a inferência diretamente no NPU.
+* Caso esteja rodando no ambiente de desenvolvimento Windows (onde o driver do NPU não existe), o módulo faz o fallback automático para CPU usando o PyTorch padrão (`.pt`), mantendo a compatibilidade do código entre desenvolvimento e produção.
