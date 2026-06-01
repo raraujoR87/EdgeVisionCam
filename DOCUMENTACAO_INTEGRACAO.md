@@ -143,6 +143,7 @@ docker push <SEU_USER_DOCKER_HUB>/visioncam-ui:latest
 * **Validação de Autenticação:** Rodando a suíte de testes `.\venv\Scripts\python scratch/test_v12_auth.py`, confirmando 5/5 testes passados (bloqueios de rotas, tokens inválidos e atualizações de senha).
 * **Validação do Bootstrap:** O código do bootstrap passou no checador de sintaxe Python (`python -m py_compile bootstrap_installer.py`) com código de retorno 0.
 * **Validação de Notificação:** O webhook interno de integração com o Telegram foi testado e enviou com sucesso a notificação de finalização do ambiente para o grupo do VisionCam.
+* **Validação de Compilação do Frontend:** Executado `npm run build` na pasta `ui` local com 100% de sucesso, compilando as rotas de produção (`/`, `/login`, `/settings`, `/setup`) sem nenhum erro de compilação, TypeScript ou linting.
 
 ---
 
