@@ -49,6 +49,16 @@ def run_deploy(url, chat_id):
     except Exception as e:
         send_msg(url, chat_id, f"❌ <b>[DEPLOY]</b> Erro de exceção: {e}")
 
+def get_system_knowledge():
+    try:
+        doc_path = r"c:\Sistemas\Gemini\VisionCam\EdgeAI\DOCUMENTACAO_INTEGRACAO.md"
+        if os.path.exists(doc_path):
+            with open(doc_path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception as e:
+        print(f"Erro ao ler conhecimento do sistema: {e}")
+    return "Nenhum documento de conhecimento local encontrado."
+
 def call_gemini_agent(prompt, history=[]):
     api_key = None
     try:
@@ -80,23 +90,30 @@ def call_gemini_agent(prompt, history=[]):
             parts=[types.Part.from_text(text=prompt)]
         ))
         
+        knowledge = get_system_knowledge()
+        system_instruction = (
+            "Você é o VisionCam Local Developer Agent, assistente e agente auxiliar da IA principal 'Antigravity'.\n"
+            "Você tem acesso completo para ler/escrever arquivos e executar comandos de terminal no host (Windows PowerShell).\n"
+            "Seu objetivo é auxiliar o usuário a gerenciar e tirar dúvidas sobre o projeto usando o conhecimento acumulado.\n\n"
+            "Aqui está o conhecimento completo das especificações e decisões técnicas do projeto:\n"
+            "==================================================\n"
+            f"{knowledge}\n"
+            "==================================================\n\n"
+            "Para rodar um comando no terminal, escreva exatamente o bloco:\n"
+            "[RUN_CMD]\n"
+            "<comando aqui>\n"
+            "[END_CMD]\n"
+            "Ao ler a saída do comando, você pode planejar os próximos passos e enviar outro comando, "
+            "ou concluir respondendo ao usuário em português explicativo.\n\n"
+            "Para criar ou atualizar um arquivo, escreva exatamente:\n"
+            "[WRITE_FILE] <caminho do arquivo>\n"
+            "<conteúdo completo do arquivo>\n"
+            "[END_WRITE]\n\n"
+            "Foque em resolver problemas locais com ações diretas no shell e tirar dúvidas com base no manual."
+        )
+        
         config = types.GenerateContentConfig(
-            system_instruction=(
-                "Você é o VisionCam Local Developer Agent. Você tem acesso de leitura/escrita no projeto local "
-                "e pode executar comandos de terminal no host (Windows PowerShell).\n"
-                "Para rodar um comando no terminal, escreva exatamente o bloco:\n"
-                "[RUN_CMD]\n"
-                "<comando aqui>\n"
-                "[END_CMD]\n"
-                "Ao receber a saída do terminal, você pode planejar os próximos passos e enviar outro comando, "
-                "ou concluir respondendo ao usuário em português explicativo.\n\n"
-                "Para criar ou atualizar um arquivo, escreva exatamente:\n"
-                "[WRITE_FILE] <caminho do arquivo>\n"
-                "<conteúdo completo do arquivo>\n"
-                "[END_WRITE]\n\n"
-                "Exemplo: se o usuário pedir para instalar o git via winget, gere o comando winget install git. "
-                "Foque em resolver o problema do usuário com ações diretas de shell no Windows."
-            ),
+            system_instruction=system_instruction,
             temperature=0.2
         )
         
