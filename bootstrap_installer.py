@@ -617,4 +617,10 @@ def main():
             print("\nEncerrando servidor bootstrap...")
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--auto":
+        print("=== MODO AUTOMÁTICO DETECTADO (DEPLOY DIRETO) ===")
+        # Executa de forma síncrona no terminal do técnico
+        run_deployment_thread("", "")
+    else:
+        main()
