@@ -799,13 +799,25 @@ class DetectionAgentThread(threading.Thread):
 
     def run(self):
         t0 = time.time()
-        print("  [V6] [DETECT-AGENT] Carregando modelo YOLO26 pose...")
-        model_pose = YOLO("yolo26n-pose.pt")
+        # Suporta carregamento dinâmico de modelos Vivante NPU (.nbg) no Radxa
+        pose_model_path = os.getenv("POSE_MODEL_PATH", "yolo26n-pose.pt")
+        obj_model_path = os.getenv("OBJ_MODEL_PATH", "yolo26s.pt")
+
+        def load_model(path):
+            if path.endswith('.nbg'):
+                from edge.vivante_pose_engine import VivantePoseEngine
+                return VivantePoseEngine(path)
+            else:
+                from ultralytics import YOLO
+                return YOLO(path)
+
+        print(f"  [V6] [DETECT-AGENT] Carregando modelo pose: {pose_model_path}...")
+        model_pose = load_model(pose_model_path)
         print(f"  [V6] [DETECT-AGENT] Pose carregado em {time.time()-t0:.1f}s")
 
         t1 = time.time()
-        print("  [V6] [DETECT-AGENT] Carregando modelo YOLO26 objetos...")
-        model_obj  = YOLO("yolo26s.pt")
+        print(f"  [V6] [DETECT-AGENT] Carregando modelo objetos: {obj_model_path}...")
+        model_obj = load_model(obj_model_path)
         print(f"  [V6] [DETECT-AGENT] Objetos carregado em {time.time()-t1:.1f}s")
 
         # ── WARMUP: first inference is always slow (JIT/CUDA compilation) ──
