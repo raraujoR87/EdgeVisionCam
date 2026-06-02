@@ -1,11 +1,14 @@
 "use client"
 import React, { useState } from 'react'
-import { Shield, Key, Loader2 } from 'lucide-react'
+import { Shield, Key, Mail, Loader2 } from 'lucide-react'
 
 export default function Login() {
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+
+  const isLocalOnly = process.env.NEXT_PUBLIC_LOCAL_ONLY === 'true'
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -13,22 +16,24 @@ export default function Login() {
     setIsLoading(true)
 
     try {
-      const res = await fetch('http://localhost:8000/api/auth/login', {
+      const payload = isLocalOnly ? { password } : { email, password }
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify(payload)
       })
 
       if (res.status === 200) {
         const data = await res.json()
         localStorage.setItem('admin_token', data.token)
-        window.location.href = '/'
+        document.cookie = `admin_token=${data.token}; path=/; max-age=604800; SameSite=Strict`;
+        window.location.href = isLocalOnly ? '/' : '/dashboard'
       } else {
         const errData = await res.json()
-        setError(errData.detail || 'Senha incorreta.')
+        setError(errData.error || 'Falha na autenticação.')
       }
     } catch (err) {
-      setError('Erro de rede. Verifique se o backend está ativo.')
+      setError('Erro de rede. Verifique se o servidor está ativo.')
     } finally {
       setIsLoading(false)
     }
@@ -45,13 +50,34 @@ export default function Login() {
           </div>
           <div>
             <h1 className="text-2xl font-black text-white uppercase tracking-tighter">VISIONCAM <span className="text-blue-500">GATEWAY</span></h1>
-            <p className="text-slate-500 text-xs mt-1 font-medium">Console técnico local — Acesso Restrito</p>
+            <p className="text-slate-500 text-xs mt-1 font-medium">
+              {isLocalOnly ? 'Console técnico local — Acesso Restrito' : 'Central de Gerência na Nuvem'}
+            </p>
           </div>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-6">
+          {!isLocalOnly && (
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Endereço de E-mail</label>
+              <div className="relative">
+                <input 
+                  type="email"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-2xl pl-12 pr-5 py-4 text-sm text-white focus:border-blue-500/50 outline-none transition-all"
+                  placeholder="seu-usuario@cliente.com"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  required
+                />
+                <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600" />
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
-            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">Senha de Administrador</label>
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block ml-1">
+              {isLocalOnly ? 'Senha de Administrador' : 'Senha de Acesso'}
+            </label>
             <div className="relative">
               <input 
                 type="password"
@@ -82,7 +108,7 @@ export default function Login() {
         </form>
 
         <div className="text-center text-[10px] text-slate-600 font-mono uppercase tracking-widest pt-2">
-          Node-ID: Cubie-A7A
+          {isLocalOnly ? 'Node-ID: Cubie-A7A' : 'VisionCam Cloud'}
         </div>
       </div>
     </div>

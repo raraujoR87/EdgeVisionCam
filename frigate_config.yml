@@ -1,0 +1,22 @@
+mqtt:
+  host: mqtt
+
+cameras:
+  camera_principal:
+    enabled: true
+    ffmpeg:
+      inputs:
+        - path: rtsp://127.0.0.1:8554/live
+          roles:
+            - detect
+            - record
+    detect:
+      enabled: true
+      width: 640
+      height: 480
+      fps: 5
+    record:
+      enabled: true
+      retain:
+        days: 3
+        mode: all

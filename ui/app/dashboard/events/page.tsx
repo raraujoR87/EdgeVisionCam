@@ -1,6 +1,7 @@
 import React from 'react';
 import { query } from '../../api/db';
-import { ShieldAlert, CheckCircle, AlertTriangle, Play, Calendar, MapPin, Eye } from 'lucide-react';
+import { ShieldAlert, CheckCircle, AlertTriangle, Play, Calendar, MapPin } from 'lucide-react';
+import { cookies } from 'next/headers';
 import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
@@ -31,15 +32,57 @@ export default async function EventsPage({
   let stores: StoreList[] = [];
   let isOffline = false;
 
-  const selectedStore = searchParams.store || '';
+  // 1. Resolver Sessão do Usuário via Cookies
+  const cookieStore = cookies();
+  const token = cookieStore.get('admin_token')?.value || '';
+  
+  let user: { email: string; role: string; store_id: number | null } | null = null;
+  if (token && token.startsWith('visioncam_tok_')) {
+    try {
+      const base64Payload = token.replace('visioncam_tok_', '');
+      const decodedStr = Buffer.from(base64Payload, 'base64').toString('utf-8');
+      user = JSON.parse(decodedStr);
+    } catch (e) {
+      console.error('Falha ao decodificar token de sessão:', e);
+    }
+  }
+
+  const isLocalOnly = process.env.NEXT_PUBLIC_LOCAL_ONLY === 'true';
+
+  // Se for Cloud e não estiver logado
+  if (!user && !isLocalOnly) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-4">
+        <ShieldAlert className="text-rose-500 animate-pulse" size={48} />
+        <h2 className="text-xl font-bold">Acesso não autorizado</h2>
+        <p className="text-slate-500 text-sm">Por favor, faça login para visualizar os relatórios da loja.</p>
+        <Link href="/login" className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors">
+          Ir para Login
+        </Link>
+      </div>
+    );
+  }
+
+  const isClient = user?.role === 'client';
+  const clientStoreId = user?.store_id;
+
+  // Filtros selecionados
+  let selectedStore = searchParams.store || '';
   const selectedVerdict = searchParams.verdict || '';
 
-  try {
-    // 1. Obter lista de lojas para filtros
-    const storesRes = await query('SELECT id, name FROM stores ORDER BY name ASC');
-    stores = storesRes.rows as StoreList[];
+  // SEGURANÇA: Se o usuário for cliente, força o filtro a ser apenas a sua própria loja (ignora manipulações na URL)
+  if (isClient && clientStoreId !== null && clientStoreId !== undefined) {
+    selectedStore = clientStoreId.toString();
+  }
 
-    // 2. Obter eventos filtrados
+  try {
+    // 2. Obter lista de lojas para filtros (admins visualizam todas, clientes não usam)
+    if (!isClient) {
+      const storesRes = await query('SELECT id, name FROM stores ORDER BY name ASC');
+      stores = storesRes.rows as StoreList[];
+    }
+
+    // 3. Obter eventos filtrados
     let queryText = `
       SELECT e.id, e.video_url, e.telemetry, e.suspicion_score, e.verdict, e.verdict_explanation, e.analyzed_at,
              s.name as store_name, s.location as store_location
@@ -63,9 +106,9 @@ export default async function EventsPage({
     const eventsRes = await query(queryText, params);
     events = eventsRes.rows as EventData[];
 
+    // Fallback de demonstração offline se o banco central estiver vazio
     if (events.length === 0 && !selectedStore && !selectedVerdict) {
       isOffline = true;
-      // Mock data se banco vazio/offline
       stores = [
         { id: 1, name: 'Supermercado Extra - Loja Centro' },
         { id: 2, name: 'Supermercado Pão de Açúcar - Pinheiros' }
@@ -105,39 +148,53 @@ export default async function EventsPage({
           analyzed_at: new Date(Date.now() - 120 * 60000).toISOString()
         }
       ];
+
+      // Se for cliente, filtra os dados de mock locais para garantir consistência no teste visual
+      if (isClient && clientStoreId !== null && clientStoreId !== undefined) {
+        events = events.filter(e => e.store_name.includes(clientStoreId === 1 ? 'Extra' : 'Pão de Açúcar'));
+      }
     }
   } catch (err) {
-    console.error('Erro na auditoria de eventos', err);
+    console.error('Erro na auditoria de eventos:', err);
     isOffline = true;
   }
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      <div>
-        <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
-          Auditoria Global de Eventos
-        </h1>
-        <p className="text-slate-400 text-sm mt-1">
-          Galeria de clipes auditados pela inteligência multimodal do Gemini na nuvem
-        </p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">
+            {isClient ? 'Minha Loja — Auditoria de Vídeo' : 'Auditoria Global de Eventos'}
+          </h1>
+          <p className="text-slate-400 text-sm mt-1">
+            {isClient ? 'Clipes e veredictos multimodal do Gemini coletados no R2 da sua loja' : 'Galeria de clipes auditados pela inteligência multimodal do Gemini na nuvem'}
+          </p>
+        </div>
+        {isOffline && (
+          <span className="px-3 py-1 bg-amber-950/40 text-amber-400 border border-amber-800/40 rounded-full text-xs font-bold font-mono">
+            ⚠️ MODO DEMONSTRAÇÃO (BANCO LOCAL)
+          </span>
+        )}
       </div>
 
       {/* Barra de Filtros */}
       <div className="bg-slate-900/40 border border-slate-800/80 p-4 rounded-xl flex flex-wrap gap-4 items-center">
         <form method="GET" className="flex flex-wrap gap-4 w-full">
-          <div className="flex flex-col">
-            <span className="text-[10px] uppercase font-bold text-slate-500 mb-1 ml-1">Filtrar por Loja</span>
-            <select
-              name="store"
-              defaultValue={selectedStore}
-              className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
-            >
-              <option value="">Todas as Lojas</option>
-              {stores.map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
+          {!isClient && (
+            <div className="flex flex-col">
+              <span className="text-[10px] uppercase font-bold text-slate-500 mb-1 ml-1">Filtrar por Loja</span>
+              <select
+                name="store"
+                defaultValue={selectedStore}
+                className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500"
+              >
+                <option value="">Todas as Lojas</option>
+                {stores.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="flex flex-col">
             <span className="text-[10px] uppercase font-bold text-slate-500 mb-1 ml-1">Filtrar por Veredicto</span>
@@ -160,7 +217,7 @@ export default async function EventsPage({
             Aplicar Filtros
           </button>
 
-          {(selectedStore || selectedVerdict) && (
+          {(!isClient && (selectedStore || selectedVerdict)) && (
             <Link
               href="/dashboard/events"
               className="mt-5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition-colors self-end"
@@ -174,7 +231,7 @@ export default async function EventsPage({
       {/* Grid de Eventos */}
       {events.length === 0 ? (
         <div className="text-center p-12 bg-slate-900/20 border border-slate-800/40 rounded-2xl">
-          <p className="text-slate-500 text-lg">Nenhum evento encontrado para os filtros selecionados.</p>
+          <p className="text-slate-500 text-lg">Nenhum evento suspeito registrado nesta loja.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">

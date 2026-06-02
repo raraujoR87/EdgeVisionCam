@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1058.0",
     "@google/generative-ai": "^0.24.1",
     "@vercel/blob": "^2.4.0",
     "lucide-react": "^0.292.0",

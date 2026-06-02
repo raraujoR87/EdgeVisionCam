@@ -1,7 +1,17 @@
 import { NextResponse } from 'next/server';
 import { query } from '../db';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { put } from '@vercel/blob';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+
+// Inicializar cliente do Cloudflare R2 (compatível com S3)
+const r2 = new S3Client({
+  endpoint: process.env.R2_ENDPOINT || '',
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+  },
+  region: 'auto',
+});
 
 export async function POST(request: Request) {
   try {
@@ -10,7 +20,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Faltando cabeçalho x-store-api-key' }, { status: 401 });
     }
 
-    // 1. Validar a loja pela API Key
+    // 1. Validar a loja pela API Key no Supabase
     const storeRes = await query('SELECT id, name, telegram_bot_token, telegram_chat_id FROM stores WHERE api_key = $1', [apiKey]);
     if (storeRes.rowCount === 0) {
       return NextResponse.json({ error: 'Chave de API inválida' }, { status: 401 });
@@ -29,12 +39,38 @@ export async function POST(request: Request) {
     const telemetry = JSON.parse(telemetryStr);
     const videoBuffer = Buffer.from(await videoFile.arrayBuffer());
 
-    // 3. Salvar o vídeo no Vercel Blob (se disponível) ou usar fallback
+    // 3. Salvar o vídeo no Cloudflare R2 (S3-compatible) ou usar fallback
     let videoUrl = '';
-    if (process.env.BLOB_READ_WRITE_TOKEN) {
-      const blob = await put(`events/${Date.now()}_${videoFile.name}`, videoFile, { access: 'public' });
-      videoUrl = blob.url;
+    const r2Bucket = process.env.R2_BUCKET_NAME || 'edgevisiocam';
+    const r2PublicDomain = process.env.R2_PUBLIC_DOMAIN || '';
+    const videoName = `${Date.now()}_${videoFile.name}`;
+
+    const r2AccessKey = process.env.R2_ACCESS_KEY_ID || '';
+    const r2SecretKey = process.env.R2_SECRET_ACCESS_KEY || '';
+
+    // Se chaves estiverem configuradas e não forem placeholders
+    if (r2AccessKey && r2SecretKey && !r2AccessKey.includes('INSIRA_SUA') && !r2AccessKey.includes('YOUR_R2')) {
+      try {
+        console.log(`[R2] Fazendo upload do video: ${videoName} para R2...`);
+        const uploadParams = {
+          Bucket: r2Bucket,
+          Key: videoName,
+          Body: videoBuffer,
+          ContentType: videoFile.type || 'video/mp4'
+        };
+        await r2.send(new PutObjectCommand(uploadParams));
+        
+        // Formatar URL pública do clipe
+        const baseDomain = r2PublicDomain.replace(/\/+$/, '');
+        videoUrl = `${baseDomain}/${videoName}`;
+        console.log(`[R2] Upload concluído com sucesso: ${videoUrl}`);
+      } catch (r2Err) {
+        console.error('[Cloudflare R2 Upload Error]', r2Err);
+        // Fallback para desenvolvimento local
+        videoUrl = `/storage/clips/${videoFile.name}`;
+      }
     } else {
+      console.warn('[R2] Credenciais do Cloudflare R2 ausentes ou padrão. Usando link mockado local.');
       videoUrl = `/storage/clips/${videoFile.name}`;
     }
 
@@ -87,11 +123,10 @@ Retorne APENAS um JSON válido seguindo a estrutura abaixo, sem marcações mark
     ]);
 
     const rawResponse = result.response.text().trim();
-    // Limpar marcações de código markdown se o modelo insistir nelas
     const cleanJsonText = rawResponse.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
     const verdict = JSON.parse(cleanJsonText);
 
-    // 5. Gravar o resultado no Banco de Dados Postgres central
+    // 5. Gravar o resultado no Banco de Dados Supabase Postgres central
     await query(`
       INSERT INTO events (store_id, video_url, telemetry, suspicion_score, verdict, verdict_explanation, analyzed_at)
       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
@@ -106,7 +141,7 @@ Retorne APENAS um JSON válido seguindo a estrutura abaixo, sem marcações mark
 
     // 6. Enviar Alerta do Telegram (se configurado na loja e classificação for suspeita/furto)
     if (store.telegram_bot_token && store.telegram_chat_id && (verdict.classification === 'FURTO_CONFIRMADO' || verdict.classification === 'SUSPEITO')) {
-      const message = `🚨 <b>SUSPEITA DE FURTO DETECTADA (Nuvem)</b>\n\n` +
+      const message = `🚨 <b>SUSPEITA DE FURTO DETECTADA (Nuvem Supabase)</b>\n\n` +
                       `🏪 <b>Loja:</b> ${store.name}\n` +
                       `👤 <b>Suspeito:</b> ${verdict.suspect_description}\n` +
                       `📦 <b>Itens:</b> ${verdict.products_stolen ? verdict.products_stolen.join(', ') : 'Nenhum'}\n` +

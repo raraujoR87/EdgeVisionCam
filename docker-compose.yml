@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  portainer-agent:
+    image: portainer/agent:latest
+    container_name: visioncam-portainer-agent
+    restart: always
+    ports:
+      - "9001:9001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: visioncam-mqtt
+    restart: always
+    ports:
+      - "1883:1883"
+    volumes:
+      - mqtt_data:/mosquitto/data
+      - mqtt_log:/mosquitto/log
+
+  frigate:
+    image: ghcr.io/blakeblackshear/frigate:stable
+    container_name: visioncam-frigate
+    restart: always
+    privileged: true
+    shm_size: "128mb"
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/galcore:/dev/galcore
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./frigate_config.yml:/config/config.yml
+      - ./storage/clips:/media/frigate/clips
+    ports:
+      - "5000:5000"
+      - "8554:8554"
+    depends_on:
+      - mqtt
+
+  visioncam-core:
+    image: visioncam-core:latest
+    container_name: visioncam-core
+    restart: always
+    environment:
+      - FRIGATE_URL=http://frigate:5000
+      - MQTT_HOST=mqtt
+      - CLOUD_API_URL=https://api.visioncam.com.br/v1
+    volumes:
+      - db_data:/app/core/database/data
+      - ./storage/events:/app/edge/storage/events
+    ports:
+      - "8090:8090"
+      - "8000:8000"
+    depends_on:
+      - frigate
+      - mqtt
+
+  visioncam-ui:
+    image: visioncam-ui:latest
+    container_name: visioncam-ui-local
+    restart: always
+    ports:
+      - "3000:3000"
+    volumes:
+      - db_data:/app/core/database/data
+    environment:
+      - NEXT_PUBLIC_API_URL=http://visioncam-core:8000
+      - NEXT_PUBLIC_LOCAL_ONLY=true
+    depends_on:
+      - visioncam-core
+
+volumes:
+  db_data:
+  mqtt_data:
+  mqtt_log:
