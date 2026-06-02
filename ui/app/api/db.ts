@@ -3,7 +3,11 @@ import { Pool } from 'pg';
 let pool: Pool | null = null;
 
 export async function query(text: string, params?: any[]) {
-  const connectionString = process.env.DATABASE_URL;
+  let connectionString = process.env.DATABASE_URL;
+  
+  if (connectionString) {
+    connectionString = connectionString.trim().replace(/^["']|["']$/g, '');
+  }
   
   if (!connectionString) {
     console.warn("⚠️ DATABASE_URL não definida. Executando em modo Offline/Mock.");

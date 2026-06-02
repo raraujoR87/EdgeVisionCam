@@ -6,12 +6,14 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 export const maxDuration = 60; // Configuração Vercel nativa para tempo limite
 
 
+const sanitizeEnv = (val?: string) => val ? val.trim().replace(/^["']|["']$/g, '') : '';
+
 // Inicializar cliente do Cloudflare R2 (compatível com S3)
 const r2 = new S3Client({
-  endpoint: process.env.R2_ENDPOINT || '',
+  endpoint: sanitizeEnv(process.env.R2_ENDPOINT),
   credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID || '',
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || '',
+    accessKeyId: sanitizeEnv(process.env.R2_ACCESS_KEY_ID),
+    secretAccessKey: sanitizeEnv(process.env.R2_SECRET_ACCESS_KEY),
   },
   region: 'auto',
 });
