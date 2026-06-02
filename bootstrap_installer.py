@@ -47,7 +47,7 @@ def check_docker_compose():
     except Exception:
         return None
 
-def run_deployment_thread(username, password):
+def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edge_id=""):
     global deploy_state
     deploy_state["is_deploying"] = True
     deploy_state["success"] = False
@@ -85,10 +85,11 @@ def run_deployment_thread(username, password):
 
     # 2. Escrever docker-compose.yml
     add_log("Gerando arquivo de configuração docker-compose.yml local...")
-    compose_content = """version: '3.8'
-
-services:
-  portainer-agent:
+    
+    # Determina o bloco do gerenciador (Portainer Agent ou Edge Agent ou nenhum)
+    mgmt_service = ""
+    if mgmt_mode == "portainer-agent":
+        mgmt_service = """  portainer-agent:
     image: portainer/agent:latest
     container_name: visioncam-portainer-agent
     restart: always
@@ -97,7 +98,30 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/volumes:/var/lib/docker/volumes
+"""
+    elif mgmt_mode == "portainer-edge-agent":
+        if not edge_id:
+            try:
+                edge_id = f"edge-{socket.gethostname()}"
+            except Exception:
+                edge_id = "edge-device"
+        mgmt_service = f"""  portainer-edge-agent:
+    image: portainer/edge-agent:latest
+    container_name: visioncam-portainer-edge-agent
+    restart: always
+    environment:
+      - EDGE_KEY={edge_key}
+      - EDGE_ID={edge_id}
+      - EDGE_INSECURE_POLL=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+"""
 
+    compose_content = f"""version: '3.8'
+
+services:
+{mgmt_service}
   mqtt:
     image: eclipse-mosquitto:2
     container_name: visioncam-mqtt
@@ -313,6 +337,9 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
             
             username = payload.get("username", "")
             password = payload.get("password", "")
+            mgmt_mode = payload.get("mgmt_mode", "none")
+            edge_key = payload.get("edge_key", "")
+            edge_id = payload.get("edge_id", "")
             
             if deploy_state["is_deploying"]:
                 self.send_response(400)
@@ -322,7 +349,7 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             # Inicia o deploy em outra thread
-            threading.Thread(target=run_deployment_thread, args=(username, password), daemon=True).start()
+            threading.Thread(target=run_deployment_thread, args=(username, password, mgmt_mode, edge_key, edge_id), daemon=True).start()
             
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -413,7 +440,7 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
 
         .form-group { margin-bottom: 20px; }
         label.field-label { display: block; font-size: 10px; font-weight: 900; text-transform: uppercase; color: #64748b; letter-spacing: 1px; margin-left: 4px; margin-bottom: 8px; }
-        input[type="text"], input[type="password"] {
+        input[type="text"], input[type="password"], select.form-select {
             width: 100%;
             background: #020617;
             border: 1px solid rgba(255, 255, 255, 0.05);
@@ -424,7 +451,17 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
             outline: none;
             transition: all 0.3s;
         }
-        input:focus { border-color: #3b82f6; }
+        select.form-select {
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+            background-position: right 12px center;
+            background-repeat: no-repeat;
+            background-size: 20px;
+            padding-right: 40px;
+            cursor: pointer;
+        }
+        input:focus, select:focus { border-color: #3b82f6; }
         
         button.btn-deploy {
             width: 100%;
@@ -529,10 +566,23 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
             } catch(e) {}
         }
 
+        function toggleEdgeFields() {
+            const mode = document.getElementById('mgmt_mode').value;
+            const edgeFields = document.getElementById('edge-fields');
+            if (mode === 'portainer-edge-agent') {
+                edgeFields.style.display = 'block';
+            } else {
+                edgeFields.style.display = 'none';
+            }
+        }
+
         async function startDeploy(e) {
             e.preventDefault();
             const user = document.getElementById('user').value;
             const pass = document.getElementById('pass').value;
+            const mgmtMode = document.getElementById('mgmt_mode').value;
+            const edgeKey = document.getElementById('edge_key').value;
+            const edgeId = document.getElementById('edge_id').value;
             
             showConsole();
             
@@ -540,7 +590,13 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
                 const res = await fetch('/api/deploy', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username: user, password: pass })
+                    body: JSON.stringify({ 
+                        username: user, 
+                        password: pass,
+                        mgmt_mode: mgmtMode,
+                        edge_key: edgeKey,
+                        edge_id: edgeId
+                    })
                 });
                 
                 if (res.status !== 200) {
@@ -555,6 +611,7 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
         window.onload = () => {
             updateStatus();
             setInterval(updateStatus, 3000);
+            toggleEdgeFields();
         };
     </script>
 </head>
@@ -590,6 +647,24 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
                 <label class="field-label">Docker Hub Access Token / Password (Opcional)</label>
                 <input type="password" id="pass" placeholder="dckr_pat_... (vazio para imagens públicas)">
             </div>
+            <div class="form-group">
+                <label class="field-label">Modo de Gerenciamento de Contêineres</label>
+                <select id="mgmt_mode" class="form-select" onchange="toggleEdgeFields()">
+                    <option value="none">Nenhum (Standalone)</option>
+                    <option value="portainer-agent" selected>Portainer Agent (Local/VPN na porta 9001)</option>
+                    <option value="portainer-edge-agent">Portainer Edge Agent (Multi-Cliente Nuvem)</option>
+                </select>
+            </div>
+            <div id="edge-fields" style="display: none;">
+                <div class="form-group">
+                    <label class="field-label">Portainer Edge Key</label>
+                    <input type="text" id="edge_key" placeholder="EDGE_KEY gerada pelo Portainer Central">
+                </div>
+                <div class="form-group">
+                    <label class="field-label">Edge Device ID (Opcional)</label>
+                    <input type="text" id="edge_id" placeholder="ex: clienteA-loja01 (vazio para usar hostname)">
+                </div>
+            </div>
             <button type="submit" id="btn-start" class="btn-deploy" disabled>Iniciar Deploy</button>
         </form>
 
@@ -617,10 +692,19 @@ def main():
             print("\nEncerrando servidor bootstrap...")
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "--auto":
+    import argparse
+    parser = argparse.ArgumentParser(description="VisionCam Edge Bootstrap Installer")
+    parser.add_argument("--auto", action="store_true", help="Executa o deploy automático direto")
+    parser.add_argument("--user", default="", help="Username do Docker Hub")
+    parser.add_argument("--pass", dest="password", default="", help="Password/Token do Docker Hub")
+    parser.add_argument("--mgmt-mode", default="none", choices=["none", "portainer-agent", "portainer-edge-agent"], help="Modo de gerenciamento de containers")
+    parser.add_argument("--edge-key", default="", help="Portainer Edge Key")
+    parser.add_argument("--edge-id", default="", help="Portainer Edge ID")
+    
+    args, unknown = parser.parse_known_args()
+    
+    if args.auto:
         print("=== MODO AUTOMÁTICO DETECTADO (DEPLOY DIRETO) ===")
-        # Executa de forma síncrona no terminal do técnico
-        run_deployment_thread("", "")
+        run_deployment_thread(args.user, args.password, args.mgmt_mode, args.edge_key, args.edge_id)
     else:
         main()

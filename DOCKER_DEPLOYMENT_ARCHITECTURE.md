@@ -46,13 +46,26 @@ graph TD
 version: '3.8'
 
 services:
-  # 1. Portainer Agent para Gestão e Suporte Remoto
-  portainer-agent:
-    image: portainer/agent:latest
-    container_name: visioncam-portainer-agent
+  # 1a. Portainer Agent para Gestão e Suporte Remoto (Local / VPN)
+  # portainer-agent:
+  #   image: portainer/agent:latest
+  #   container_name: visioncam-portainer-agent
+  #   restart: always
+  #   ports:
+  #     - "9001:9001"
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - /var/lib/docker/volumes:/var/lib/docker/volumes
+
+  # 1b. Portainer Edge Agent (Multi-Cliente / Nuvem Centralizada - Recomendado)
+  portainer-edge-agent:
+    image: portainer/edge-agent:latest
+    container_name: visioncam-portainer-edge-agent
     restart: always
-    ports:
-      - "9001:9001"
+    environment:
+      - EDGE_KEY=sua_edge_key_aqui
+      - EDGE_ID=nome_do_cliente_ou_dispositivo
+      - EDGE_INSECURE_POLL=1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/volumes:/var/lib/docker/volumes
@@ -129,8 +142,16 @@ volumes:
 
 ## 🛡️ 3. Decisões Estratégicas de Suporte e Custos
 
-1. **Gestão Remota via Portainer:** 
-   * Cada Radxa roda um `portainer-agent` leve. A equipe de suporte centralizada usa um painel **Portainer CE/EE** na nuvem para monitorar logs, reiniciar serviços, atualizar imagens docker e alterar configurações sem precisar de VPN ou acesso direto por SSH à loja.
+1. **Gestão Remota via Portainer (Multi-Cliente):** 
+   * **Portainer Agent (Local/VPN):** Cada placa de borda pode rodar o Portainer Agent padrão na porta `9001`. Indicado quando todas as placas e a equipe de suporte estão na mesma VPN corporativa ou rede local.
+   * **Portainer Edge Agent (Nuvem Multi-Cliente - Recomendado):** Projetado para cenários onde as placas de borda estão distribuídas em redes de clientes diferentes atrás de NAT e firewalls, sem IPs públicos.
+     * O Edge Agent inicia uma conexão de saída criptografada (túnel reverso) em direção ao Portainer Server central da nuvem.
+     * **Segurança:** O firewall do cliente não precisa ter portas abertas para acesso externo, pois a conexão é originada de dentro para fora.
+     * **Provisionamento dinâmico:** No setup inicial (`bootstrap_installer.py` ou `install.sh`), o técnico informa o `EDGE_KEY` gerado para o cliente específico no painel central e o `EDGE_ID` único do dispositivo.
+     * **Comando de Instalação Rápido:**
+       ```bash
+       sudo bash install.sh --mgmt-mode portainer-edge-agent --edge-key "SUA_KEY_AQUI" --edge-id "cliente-loja01"
+       ```
 2. **Remoção do Audit Gallery Local:**
    * O frontend Next.js embarcado no Radxa terá apenas a aba de **Calibração de Zonas** (Guard Zones), **Configurações de Rede/Credenciais** e **Status do Hardware**.
    * A SQLite local manterá os eventos de forma efêmera (apenas uma fila/buffer). Assim que o agente envia o evento com sucesso para a nuvem, ele é deletado localmente após alguns dias para não estourar o armazenamento eMMC do Radxa.

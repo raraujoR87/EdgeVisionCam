@@ -62,8 +62,50 @@ chown -R "$ACTUAL_USER":"$ACTUAL_USER" "$INSTALL_DIR"
 
 # 5. Efetuar o Deploy Automático das Imagens de Produção
 echo "🚀 [4/4] Inicializando os serviços da VisionCam em modo Automático..."
-# Executa o instalador em modo autônomo (--auto) que escreve as configs e inicia o Compose
-python3 bootstrap_installer.py --auto
+
+# Inicializa variáveis padrão
+MGMT_MODE="portainer-agent"  # Mantém comportamento original local/VPN por padrão
+EDGE_KEY=""
+EDGE_ID=""
+DOCKER_USER=""
+DOCKER_PASS=""
+
+# Parse de argumentos passados para o script
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --mgmt-mode)
+      MGMT_MODE="$2"
+      shift 2
+      ;;
+    --edge-key)
+      EDGE_KEY="$2"
+      shift 2
+      ;;
+    --edge-id)
+      EDGE_ID="$2"
+      shift 2
+      ;;
+    --user)
+      DOCKER_USER="$2"
+      shift 2
+      ;;
+    --pass)
+      DOCKER_PASS="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+# Executa o instalador em modo autônomo (--auto) passando os argumentos correspondentes
+python3 bootstrap_installer.py --auto \
+  --mgmt-mode "$MGMT_MODE" \
+  --edge-key "$EDGE_KEY" \
+  --edge-id "$EDGE_ID" \
+  --user "$DOCKER_USER" \
+  --pass "$DOCKER_PASS"
 
 echo "=========================================================="
 echo " 🎉 SETUP COMPLETO! A stack da VisionCam está ONLINE!"
