@@ -25,11 +25,20 @@ def get_config():
 
 def send_msg(url, chat_id, text):
     try:
-        requests.post(f"{url}/sendMessage", json={
+        resp = requests.post(f"{url}/sendMessage", json={
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML"
         }, timeout=15)
+        if resp.status_code != 200:
+            print(f"[BOT ERROR] Falha ao enviar mensagem HTML (Status {resp.status_code}): {resp.text}")
+            # Fallback para envio simples em texto plano para garantir a entrega
+            resp_fallback = requests.post(f"{url}/sendMessage", json={
+                "chat_id": chat_id,
+                "text": text
+            }, timeout=15)
+            if resp_fallback.status_code != 200:
+                print(f"[BOT ERROR] Falha no envio simples de fallback (Status {resp_fallback.status_code}): {resp_fallback.text}")
     except Exception as e:
         print(f"Erro ao enviar mensagem: {e}")
 
