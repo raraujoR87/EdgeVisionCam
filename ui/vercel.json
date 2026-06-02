@@ -1,15 +1,5 @@
 {
   "version": 2,
   "buildCommand": "next build",
-  "cleanUrls": true,
-  "functions": {
-    "app/api/webhook/route.ts": {
-      "maxDuration": 60,
-      "memory": 1024
-    },
-    "app/api/telemetry/route.ts": {
-      "maxDuration": 15,
-      "memory": 512
-    }
-  }
+  "cleanUrls": true
 }

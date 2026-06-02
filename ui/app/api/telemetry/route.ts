@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { query } from '../db';
 
+export const maxDuration = 15; // Configuração Vercel nativa para tempo limite
+
+
 export async function POST(request: Request) {
   try {
     const apiKey = request.headers.get('x-store-api-key') || '';

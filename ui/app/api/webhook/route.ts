@@ -3,6 +3,9 @@ import { query } from '../db';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
+export const maxDuration = 60; // Configuração Vercel nativa para tempo limite
+
+
 // Inicializar cliente do Cloudflare R2 (compatível com S3)
 const r2 = new S3Client({
   endpoint: process.env.R2_ENDPOINT || '',
