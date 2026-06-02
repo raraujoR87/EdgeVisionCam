@@ -1,0 +1,43 @@
+import { NextResponse } from 'next/server';
+import { query } from '../db';
+
+export async function POST(request: Request) {
+  try {
+    const apiKey = request.headers.get('x-store-api-key') || '';
+    if (!apiKey) {
+      return NextResponse.json({ error: 'Faltando cabeçalho x-store-api-key' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { cpu_usage, ram_usage, npu_status } = body;
+
+    if (cpu_usage === undefined || ram_usage === undefined || !npu_status) {
+      return NextResponse.json({ error: 'Campos obrigatórios ausentes: cpu_usage, ram_usage, npu_status' }, { status: 400 });
+    }
+
+    // 1. Validar a loja pela API Key
+    const storeRes = await query('SELECT id, name FROM stores WHERE api_key = $1', [apiKey]);
+    if (storeRes.rowCount === 0) {
+      return NextResponse.json({ error: 'Chave de API inválida' }, { status: 401 });
+    }
+
+    const storeId = storeRes.rows[0].id;
+
+    // 2. Inserir ou Atualizar o status do hardware
+    await query(`
+      INSERT INTO hardware_status (store_id, cpu_usage, ram_usage, npu_status, last_seen)
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+      ON CONFLICT (store_id) 
+      DO UPDATE SET 
+        cpu_usage = EXCLUDED.cpu_usage,
+        ram_usage = EXCLUDED.ram_usage,
+        npu_status = EXCLUDED.npu_status,
+        last_seen = CURRENT_TIMESTAMP
+    `, [storeId, cpu_usage, ram_usage, npu_status]);
+
+    return NextResponse.json({ success: true, store: storeRes.rows[0].name });
+  } catch (error: any) {
+    console.error('[Telemetry API Error]', error);
+    return NextResponse.json({ error: 'Erro interno do servidor', details: error.message }, { status: 500 });
+  }
+}

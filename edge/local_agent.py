@@ -39,6 +39,43 @@ os.makedirs(EVENT_STORAGE, exist_ok=True)
 GONE_TIMEOUT = 20.0  # Must match vision_engine.py
 BATCH_DELAY  = 3.0   # Seconds to wait for additional products before escalating
 from datetime import datetime
+import socket
+
+def get_system_stats():
+    cpu = 10.0
+    ram = 25.0
+    
+    if sys.platform != "win32":
+        try:
+            # CPU from load avg
+            load = os.getloadavg()[0]
+            cores = os.cpu_count() or 1
+            cpu = min(100.0, (load / cores) * 100)
+            
+            # RAM from /proc/meminfo
+            with open('/proc/meminfo', 'r') as f:
+                lines = f.readlines()
+            mem_total = 1024
+            mem_avail = 512
+            for line in lines:
+                if 'MemTotal' in line:
+                    mem_total = int(line.split()[1])
+                elif 'MemAvailable' in line:
+                    mem_avail = int(line.split()[1])
+            ram = ((mem_total - mem_avail) / mem_total) * 100
+        except Exception:
+            pass
+    else:
+        try:
+            import psutil
+            cpu = psutil.cpu_percent()
+            ram = psutil.virtual_memory().percent
+        except ImportError:
+            import random
+            cpu = 15.0 + random.random() * 10.0
+            ram = 45.0 + random.random() * 5.0
+            
+    return round(cpu, 1), round(ram, 1)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -699,11 +736,78 @@ class LocalAgent:
             ps.state = AgentState.IDLE
             self.log(f"P_{ps.pid}: Retornando para IDLE")
 
+    async def telemetry_sender_loop(self):
+        print("  [TELEMETRIA] Loop de Telemetria Iniciado.")
+        while True:
+            try:
+                cpu, ram = get_system_stats()
+                
+                # Check NPU status
+                npu_status = "ACTIVE_TIMVX"
+                pose_model = os.getenv("POSE_MODEL_PATH", "")
+                if pose_model.endswith(".pt") or not os.path.exists("/dev/galcore"):
+                    npu_status = "CPU_FALLBACK"
+                
+                # 1. Save to local SQLite
+                try:
+                    db = await get_queue_db()
+                    await db.execute(
+                        "INSERT OR REPLACE INTO telemetry (timestamp, cpu_usage, ram_usage, inference_ms) VALUES (?, ?, ?, ?)",
+                        (time.time(), cpu, ram, 0.0)
+                    )
+                    await db.commit()
+                    await db.close()
+                except Exception as e:
+                    self.log(f"Erro ao salvar telemetria local: {e}")
+                
+                # 2. Check if we should send to Cloud API
+                from core.database.db import get_system_db
+                db_sys = await get_system_db()
+                cursor = await db_sys.execute("SELECT key, value FROM config WHERE key IN ('model_source', 'cloud_api_url', 'store_api_key')")
+                rows = await cursor.fetchall()
+                config = {r['key']: r['value'] for r in rows}
+                await db_sys.close()
+                
+                model_source = config.get("model_source", "hybrid").lower()
+                cloud_url = config.get("cloud_api_url") or os.getenv("CLOUD_API_URL")
+                api_key = config.get("store_api_key") or os.getenv("STORE_API_KEY")
+                
+                if model_source == "cloud" and cloud_url and api_key:
+                    url = f"{cloud_url.rstrip('/')}/api/telemetry"
+                    headers = {
+                        "x-store-api-key": api_key,
+                        "Content-Type": "application/json"
+                    }
+                    payload = {
+                        "cpu_usage": cpu,
+                        "ram_usage": ram,
+                        "npu_status": npu_status
+                    }
+                    
+                    loop = asyncio.get_event_loop()
+                    def fire_and_forget():
+                        try:
+                            import requests
+                            resp = requests.post(url, headers=headers, json=payload, timeout=5)
+                            if resp.status_code != 200:
+                                print(f"  [TELEMETRIA CLOUD ERR] status: {resp.status_code}, response: {resp.text}")
+                        except Exception as ex:
+                            print(f"  [TELEMETRIA CLOUD ERR] {ex}")
+                            
+                    await loop.run_in_executor(None, fire_and_forget)
+                    
+            except Exception as e:
+                print(f"  [TELEMETRIA ERR] {e}")
+                
+            await asyncio.sleep(10)
+
     async def run(self):
         """Main event loop."""
         print("  [AGENTE] Agente Local iniciado (PoseIntent + LangGraph)")
         print(f"  [AGENTE] Threshold de intencao: {self.INTENT_THRESHOLD}")
         print(f"  [AGENTE] Abaixo do threshold = CLEARED (sem Gemini)")
+        # Inicia o loop de telemetria
+        asyncio.create_task(self.telemetry_sender_loop())
         while True:
             try:
                 event = await asyncio.wait_for(self.event_queue.get(), timeout=1.0)

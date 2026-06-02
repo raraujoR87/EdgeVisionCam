@@ -41,7 +41,9 @@ async def init_db():
             "route_left": "Esquerda",
             "route_right": "Direita",
             "brain_rules": "Analyze for shoplifting or product concealment.",
-            "admin_password_hash": "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918" # sha256("admin")
+            "admin_password_hash": "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918", # sha256("admin")
+            "cloud_api_url": "https://api.visioncam.com.br/v1",
+            "store_api_key": "vc_key_tok_loja_centro_001"
         }
         for key, val in default_configs.items():
             await db.execute("INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (key, val))

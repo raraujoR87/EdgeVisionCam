@@ -9,14 +9,18 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@vercel/blob": "^2.4.0",
     "lucide-react": "^0.292.0",
     "next": "14.0.3",
+    "pg": "^8.21.0",
     "react": "^18",
     "react-dom": "^18",
     "swr": "^2.2.4"
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "autoprefixer": "^10.0.1",

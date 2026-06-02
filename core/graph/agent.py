@@ -146,19 +146,76 @@ async def node_video_investigator(state: GraphState) -> Dict[str, Any]:
     
     async with aiosqlite.connect(SYSTEM_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT value FROM config WHERE key = 'gemini_api_key'") as cursor:
-            row = await cursor.fetchone()
-            api_key = row['value'] if row else os.getenv("GEMINI_API_KEY")
+        async with db.execute("SELECT key, value FROM config WHERE key IN ('gemini_api_key', 'model_source', 'cloud_api_url', 'store_api_key')") as cursor:
+            rows = await cursor.fetchall()
+            config_dict = {r['key']: r['value'] for r in rows}
             
-    if not api_key:
-        return {"video_analysis": {"error": "Chave API ausente", "description": "Falha na análise de vídeo por falta de credenciais."}}
-        
+    model_source = config_dict.get('model_source', 'hybrid').lower()
+    cloud_url = config_dict.get('cloud_api_url') or os.getenv("CLOUD_API_URL")
+    api_key = config_dict.get('store_api_key') or os.getenv("STORE_API_KEY")
+    
     video_path = os.path.join(EVENT_STORAGE, event.video_path)
     if not os.path.exists(video_path):
         return {"video_analysis": {"error": "Vídeo ausente", "description": "Arquivo de vídeo ausente na borda."}}
         
+    # Roteamento Cloud (Vercel API Gateway)
+    if model_source == 'cloud':
+        if not cloud_url or not api_key:
+            err_msg = "Configurações de nuvem ausentes (cloud_api_url ou store_api_key)."
+            print(f"  [BRAIN CLOUD ERR] {err_msg}")
+            return {"video_analysis": {"error": "Configuração ausente", "description": err_msg}}
+            
+        print(f"  [BRAIN CLOUD] Encaminhando evento {event.id} para a nuvem: {cloud_url}...")
+        try:
+            payload = {}
+            if event.payload_json:
+                try: payload = json.loads(event.payload_json)
+                except: pass
+            
+            url = f"{cloud_url.rstrip('/')}/api/webhook"
+            headers = {
+                "x-store-api-key": api_key
+            }
+            
+            def send_multipart_request():
+                with open(video_path, 'rb') as vf:
+                    files = {
+                        'video': (event.video_path, vf, 'video/mp4')
+                    }
+                    data = {
+                        'telemetry': json.dumps(payload)
+                    }
+                    resp = requests.post(url, headers=headers, data=data, files=files, timeout=90)
+                    return resp
+            
+            resp = await asyncio.to_thread(send_multipart_request)
+            
+            if resp.status_code == 200:
+                resp_json = resp.json()
+                verdict = resp_json.get('verdict')
+                print(f"  [BRAIN CLOUD SUCCESS] Veredicto recebido da nuvem: {verdict.get('classification')}")
+                return {
+                    "final_verdict": verdict, 
+                    "video_analysis": {"description": "Analisado na nuvem Vercel pelo Gemini."},
+                    "model_source": "cloud"
+                }
+            else:
+                err_desc = f"API Central respondeu com status {resp.status_code}: {resp.text}"
+                print(f"  [BRAIN CLOUD ERR] {err_desc}")
+                return {"video_analysis": {"error": "Erro na nuvem", "description": err_desc}}
+                
+        except Exception as e:
+            err_desc = f"Falha na conexão com a nuvem: {e}"
+            print(f"  [BRAIN CLOUD EXCEPTION] {err_desc}")
+            return {"video_analysis": {"error": "Conexão falhou", "description": err_desc}}
+
+    # Fallback Local Gemini Flow
+    api_key_gemini = config_dict.get('gemini_api_key') or os.getenv("GEMINI_API_KEY")
+    if not api_key_gemini:
+        return {"video_analysis": {"error": "Chave API ausente", "description": "Falha na análise de vídeo por falta de credenciais."}}
+        
     try:
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=api_key_gemini)
         model_id = state.get("model_id", "gemini-1.5-flash")
         
         print(f"  [INVESTIGADOR DE VÍDEO] Enviando vídeo {event.video_path} para o {model_id}...")
@@ -189,6 +246,11 @@ Escreva sua resposta de forma puramente factual e objetiva. Responda em portugu�
         return {"video_analysis": {"error": str(e), "description": f"Falha na análise do vídeo: {e}"}}
 
 async def node_security_auditor(state: GraphState) -> Dict[str, Any]:
+    # Se já foi analisado e preenchido na nuvem, ignora o processamento local
+    if state.get("final_verdict"):
+        print("  [AUDITOR DE SEGURANÇA] Veredicto já definido pela nuvem. Ignorando auditoria local.")
+        return {"final_verdict": state.get("final_verdict")}
+        
     event = state.get("event")
     if not event: return {}
     
