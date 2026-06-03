@@ -7,7 +7,7 @@ google-genai==2.4.0
 langgraph==1.2.0
 ultralytics==8.4.51
 opencv-python==4.13.0.92
-numpy==2.4.5
+numpy>=1.23.0
 httpx==0.28.1
 backoff==2.2.1
 aiosqlite==0.22.1

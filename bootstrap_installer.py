@@ -152,7 +152,7 @@ services:
       - mqtt
 
   visioncam-core:
-    image: visioncam-core:latest
+    image: raphael7araujo/visioncam-core:latest
     container_name: visioncam-core
     restart: always
     environment:
@@ -170,7 +170,7 @@ services:
       - mqtt
 
   visioncam-ui:
-    image: visioncam-ui:latest
+    image: raphael7araujo/visioncam-ui:latest
     container_name: visioncam-ui-local
     restart: always
     ports:

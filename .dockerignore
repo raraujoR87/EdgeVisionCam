@@ -1,0 +1,35 @@
+# Ignore local Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Ignore UI dependencies and builds (since ui has its own docker context)
+ui/node_modules/
+ui/.next/
+ui/out/
+
+# Ignore Git directory and settings
+.git/
+.gitignore
+.dockerignore
+
+# Ignore database data files (which should be mounted as volumes)
+core/database/data/
+*.db
+*.db-journal
+*.db-wal
+edge/storage/
+**/storage/
+
+# Ignore logs
+*.log
+core_agent_e2e.log
+test_run.log
