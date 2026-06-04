@@ -41,7 +41,7 @@ start "VisionCam: Brain" cmd /k ".\venv\Scripts\activate && python core/graph/ag
 :: 5. DASHBOARD (Port 3000)
 echo [4/4] Launching Enterprise SOC Dashboard...
 cd ui
-start "VisionCam: UI Dashboard" cmd /k "npm run dev"
+start "VisionCam: UI Dashboard" cmd /k "set NEXT_PUBLIC_LOCAL_ONLY=true&& npm run dev"
 
 echo ======================================================
 echo   SYSTEM ONLINE: 
