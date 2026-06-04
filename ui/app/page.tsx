@@ -1,12 +1,28 @@
 "use client"
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import useSWR from 'swr'
 import { Activity, ShieldAlert, CheckCircle } from 'lucide-react'
+import { getApiUrl } from './utils/api'
 
 const fetcher = (url: string) => fetch(url).then(res => res.json())
 
 export default function Overview() {
-  const { data: events, error: eventsError } = useSWR('http://localhost:8000/api/events', fetcher, { refreshInterval: 3000 })
-  const { data: telemetry, error: telError } = useSWR('http://localhost:8000/api/telemetry', fetcher, { refreshInterval: 3000 })
+  const router = useRouter()
+  const isLocalOnly = process.env.NEXT_PUBLIC_LOCAL_ONLY === 'true'
+
+  useEffect(() => {
+    if (isLocalOnly) {
+      router.replace('/setup')
+    }
+  }, [isLocalOnly, router])
+
+  const { data: events, error: eventsError } = useSWR(isLocalOnly ? null : getApiUrl('/api/events'), fetcher, { refreshInterval: 3000 })
+  const { data: telemetry, error: telError } = useSWR(isLocalOnly ? null : getApiUrl('/api/telemetry'), fetcher, { refreshInterval: 3000 })
+
+  if (isLocalOnly) {
+    return <div className="text-slate-500">Redirecting to setup...</div>
+  }
 
   if (eventsError || telError) return <div className="text-red-500">Failed to load data</div>
   if (!events || !telemetry) return <div className="text-slate-500">Loading metrics...</div>

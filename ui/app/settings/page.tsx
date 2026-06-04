@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react'
 import { Save, ShieldCheck, Key, MessageSquare, BrainCircuit, Loader2, CheckCircle2, MapPin, Camera } from 'lucide-react'
 import useSWR from 'swr'
+import { getApiUrl } from '../utils/api'
 
 const fetcher = (url: string) => {
   const token = typeof window !== 'undefined' ? localStorage.getItem('admin_token') : null
@@ -29,7 +30,7 @@ export default function EngineRoom() {
   const [isSaving, setIsSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
 
-  const { data: config, mutate } = useSWR('http://localhost:8000/api/config', fetcher)
+  const { data: config, mutate } = useSWR(getApiUrl('/api/config'), fetcher)
 
   // Load existing config into state
   useEffect(() => {
@@ -48,7 +49,7 @@ export default function EngineRoom() {
 
   const saveConfig = async (key: string, value: string) => {
     const token = localStorage.getItem('admin_token')
-    await fetch('http://localhost:8000/api/config', {
+    await fetch(getApiUrl('/api/config'), {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',

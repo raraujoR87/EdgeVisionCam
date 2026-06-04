@@ -7,7 +7,8 @@ def main():
         "api": ["python", "core/api_internal/main.py"],
         "agent": ["python", "core/graph/agent.py"],
         "engine": ["python", "edge/vision_engine.py"],
-        "admin_bot": ["python", "telegram_admin_bot.py"]
+        "admin_bot": ["python", "telegram_admin_bot.py"],
+        "frigate_bridge": ["python", "edge/frigate_bridge.py"]
     }
     
     running = {}

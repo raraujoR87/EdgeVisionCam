@@ -10,7 +10,7 @@ import httpx
 from fastapi import FastAPI, Request, BackgroundTasks
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from core.database.db import QUEUE_DB_PATH
+from core.database.db import QUEUE_DB_PATH, SYSTEM_DB_PATH
 
 # Configuration
 FRIGATE_URL = os.getenv("FRIGATE_URL", "http://127.0.0.1:5000")
@@ -53,6 +53,28 @@ def analyze_and_enqueue_clip(event_id: str, camera: str, label: str):
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 20.0
         
+        # Load active zones for this camera
+        zones_polygons = []
+        try:
+            import sqlite3
+            conn = sqlite3.connect(SYSTEM_DB_PATH)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT points_json FROM zones WHERE is_active = 1 AND camera_name = ?", (camera,))
+            except sqlite3.OperationalError:
+                # Fallback if migration hasn't run yet or table is old
+                cur.execute("SELECT points_json FROM zones WHERE is_active = 1")
+            
+            for row in cur.fetchall():
+                pts = json.loads(row['points_json'])
+                poly = np.array([[p['x'], p['y']] for p in pts], dtype=np.int32)
+                zones_polygons.append(poly)
+            conn.close()
+            print(f"  [FRIGATE BRIDGE] Loaded {len(zones_polygons)} active zones for camera '{camera}'.")
+        except Exception as zone_err:
+            print(f"  [FRIGATE BRIDGE ERROR] Failed to load zones for '{camera}': {zone_err}")
+
         print(f"  [FRIGATE BRIDGE] Running offline YOLO-Pose analysis on {total_frames} frames...")
         
         has_concealment = False
@@ -76,6 +98,20 @@ def analyze_and_enqueue_clip(event_id: str, camera: str, label: str):
                     bxs = res_pose[0].boxes.xyxy.cpu().numpy()
                     
                     for idx, k in enumerate(kpts):
+                        # Filter: check if the person is inside any active zone
+                        if zones_polygons:
+                            person_in_zone = False
+                            for pt in k:
+                                if len(pt) >= 2 and pt[0] > 0 and pt[1] > 0:
+                                    for poly in zones_polygons:
+                                        if cv2.pointPolygonTest(poly, (float(pt[0]), float(pt[1])), False) >= 0:
+                                            person_in_zone = True
+                                            break
+                                if person_in_zone:
+                                    break
+                            if not person_in_zone:
+                                continue
+
                         # Extract HSV histogram once
                         if person_hist is None and idx < len(bxs):
                             box = bxs[idx].astype(int)

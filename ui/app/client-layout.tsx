@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink } from 'lucide-react'
 import { usePathname } from 'next/navigation'
+import { getApiUrl } from './utils/api'
 
 interface UserSession {
   email: string;
@@ -30,7 +31,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
       window.location.href = '/login'
     } else {
       // Validar sessão de forma unificada (local ou Supabase na nuvem)
-      fetch('/api/auth/verify', {
+      fetch(getApiUrl('/api/auth/verify'), {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       .then(res => {
@@ -123,10 +124,6 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           ) : (
             // Sidebar para Técnico Local (Borda)
             <>
-              <Link href="/" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <LayoutDashboard size={20} />
-                <span className="font-medium">Overview</span>
-              </Link>
               <Link href="/setup" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/setup' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Target size={20} />
                 <span className="font-medium">Zone Setup</span>

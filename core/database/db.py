@@ -17,7 +17,8 @@ async def init_db():
                 name TEXT NOT NULL,
                 points_json TEXT NOT NULL,
                 is_active BOOLEAN DEFAULT 1,
-                trigger_count INTEGER DEFAULT 0
+                trigger_count INTEGER DEFAULT 0,
+                camera_name TEXT DEFAULT 'camera_principal'
             )
         """)
         
@@ -26,6 +27,19 @@ async def init_db():
         except: pass
         try: await db.execute("ALTER TABLE zones ADD COLUMN trigger_count INTEGER DEFAULT 0")
         except: pass
+        try: await db.execute("ALTER TABLE zones ADD COLUMN camera_name TEXT DEFAULT 'camera_principal'")
+        except: pass
+        
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS cameras (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                rtsp_url TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT 1
+            )
+        """)
+        
+        await db.execute("INSERT OR IGNORE INTO cameras (name, rtsp_url, is_active) VALUES ('camera_principal', 'rtsp://127.0.0.1:8554/live', 1)")
         
         await db.execute("""
             CREATE TABLE IF NOT EXISTS config (

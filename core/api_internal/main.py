@@ -13,6 +13,119 @@ from typing import List, Optional
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from core.database.db import init_db, get_system_db, get_queue_db
 from shared.schemas import Zone, Point
+import re
+
+class CameraPayload(BaseModel):
+    id: Optional[int] = None
+    name: str
+    rtsp_url: str
+    is_active: bool = True
+
+def sanitize_camera_name(name: str) -> str:
+    cleaned = name.lower().strip()
+    cleaned = re.sub(r'[^a-z0-9_]', '_', cleaned)
+    cleaned = re.sub(r'_+', '_', cleaned)
+    return cleaned.strip('_')
+
+def generate_frigate_config():
+    import sqlite3
+    try:
+        db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'database', 'data', 'system.db'))
+        if not os.path.exists(db_path):
+            print(f"  [FRIGATE CONFIG] DB not found at {db_path}, skipping config generation.")
+            return False
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT name, rtsp_url FROM cameras WHERE is_active = 1")
+        rows = cur.fetchall()
+        conn.close()
+        
+        yaml_lines = [
+            "mqtt:",
+            "  host: mqtt",
+            "",
+            "cameras:"
+        ]
+        
+        if not rows:
+            yaml_lines.extend([
+                "  camera_principal:",
+                "    enabled: true",
+                "    ffmpeg:",
+                "      inputs:",
+                "        - path: rtsp://127.0.0.1:8554/live",
+                "          roles:",
+                "            - detect",
+                "            - record",
+                "    detect:",
+                "      enabled: true",
+                "      width: 640",
+                "      height: 480",
+                "      fps: 5",
+                "    record:",
+                "      enabled: true",
+                "      retain:",
+                "        days: 3",
+                "        mode: all"
+            ])
+        else:
+            for row in rows:
+                cam_name = sanitize_camera_name(row['name'])
+                rtsp_url = row['rtsp_url']
+                yaml_lines.extend([
+                    f"  {cam_name}:",
+                    "    enabled: true",
+                    "    ffmpeg:",
+                    "      inputs:",
+                    f"        - path: {rtsp_url}",
+                    "          roles:",
+                    "            - detect",
+                    "            - record",
+                    "    detect:",
+                    "      enabled: true",
+                    "      width: 640",
+                    "      height: 480",
+                    "      fps: 5",
+                    "    record:",
+                    "      enabled: true",
+                    "      retain:",
+                    "        days: 3",
+                    "        mode: all"
+                ])
+                
+        config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'frigate_config.yml'))
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write("\n".join(yaml_lines) + "\n")
+        print(f"  [FRIGATE CONFIG] Generated config file at {config_path}")
+        return True
+    except Exception as e:
+        print(f"  [FRIGATE CONFIG ERROR] Failed to generate: {e}")
+        import traceback; traceback.print_exc()
+        return False
+
+def restart_frigate_container():
+    import socket
+    socket_path = "/var/run/docker.sock"
+    if not os.path.exists(socket_path):
+        print("  [DOCKER] Socket not found at /var/run/docker.sock, skipping container restart.")
+        return False
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(socket_path)
+        request = (
+            "POST /v1.41/containers/visioncam-frigate/restart HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Connection: close\r\n\r\n"
+        )
+        client.sendall(request.encode('utf-8'))
+        response = client.recv(4096).decode('utf-8', errors='ignore')
+        client.close()
+        print(f"  [DOCKER] Frigate container restart command sent: {response.splitlines()[0]}")
+        return True
+    except Exception as e:
+        print(f"  [DOCKER ERROR] Failed to restart visioncam-frigate container: {e}")
+        return False
 
 app = FastAPI(title="VisionCam Edge-Safe API")
 
@@ -159,6 +272,64 @@ async def frame_generator():
 async def video_feed():
     return StreamingResponse(frame_generator(), media_type='multipart/x-mixed-replace; boundary=frame')
 
+# --- CAMERA CONFIG ENDPOINTS ---
+
+@app.get("/api/cameras")
+async def get_cameras(request: Request):
+    await verify_token(request)
+    db = await get_system_db()
+    async with db.execute("SELECT * FROM cameras") as cursor:
+        rows = await cursor.fetchall()
+    await db.close()
+    return [dict(row) for row in rows]
+
+@app.post("/api/cameras")
+async def save_camera(camera: CameraPayload, request: Request):
+    await verify_token(request)
+    db = await get_system_db()
+    sanitized_name = sanitize_camera_name(camera.name)
+    if not sanitized_name:
+        raise HTTPException(status_code=400, detail="Nome de câmera inválido. Use apenas letras e números.")
+    
+    if camera.id:
+        await db.execute(
+            "UPDATE cameras SET name = ?, rtsp_url = ?, is_active = ? WHERE id = ?",
+            (sanitized_name, camera.rtsp_url, 1 if camera.is_active else 0, camera.id)
+        )
+    else:
+        # Check limit of 4 cameras
+        async with db.execute("SELECT COUNT(*) as count FROM cameras") as cursor:
+            row = await cursor.fetchone()
+            if row and row['count'] >= 4:
+                await db.close()
+                raise HTTPException(status_code=400, detail="Limite máximo de 4 câmeras atingido.")
+        await db.execute(
+            "INSERT OR REPLACE INTO cameras (name, rtsp_url, is_active) VALUES (?, ?, ?)",
+            (sanitized_name, camera.rtsp_url, 1 if camera.is_active else 0)
+        )
+    await db.commit()
+    await db.close()
+    
+    # Regenerate config and restart Frigate
+    generate_frigate_config()
+    restart_frigate_container()
+    
+    return {"status": "success"}
+
+@app.delete("/api/cameras/{camera_id}")
+async def delete_camera(camera_id: int, request: Request):
+    await verify_token(request)
+    db = await get_system_db()
+    await db.execute("DELETE FROM cameras WHERE id = ?", (camera_id,))
+    await db.commit()
+    await db.close()
+    
+    # Regenerate config and restart Frigate
+    generate_frigate_config()
+    restart_frigate_container()
+    
+    return {"status": "success"}
+
 # --- ZONE ENDPOINTS ---
 
 @app.post("/api/zones")
@@ -169,7 +340,7 @@ async def create_zone(zone: Zone, request: Request):
         # Support both Pydantic v1 and v2
         pts = [p.dict() if hasattr(p, 'dict') else p.model_dump() for p in zone.polygon]
         points_json = json.dumps(pts)
-        await db.execute("INSERT INTO zones (name, points_json, is_active, trigger_count) VALUES (?, ?, 1, 0)", (zone.name, points_json))
+        await db.execute("INSERT INTO zones (name, points_json, is_active, trigger_count, camera_name) VALUES (?, ?, 1, 0, ?)", (zone.name, points_json, zone.camera_name))
         await db.commit()
         await db.close()
         return {"status": "success"}

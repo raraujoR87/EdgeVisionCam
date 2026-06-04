@@ -9,6 +9,7 @@ class Zone(BaseModel):
     id: Optional[int] = None
     name: str
     polygon: List[Point]
+    camera_name: Optional[str] = 'camera_principal'
 
 class Event(BaseModel):
     id: Optional[int] = None
