@@ -1,6 +1,7 @@
 "use client"
 import React, { useState } from 'react'
 import { Shield, Key, Mail, Loader2 } from 'lucide-react'
+import { getApiUrl } from '../utils/api'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -16,8 +17,9 @@ export default function Login() {
     setIsLoading(true)
 
     try {
+      const url = isLocalOnly ? getApiUrl('/api/auth/login') : '/api/auth/login'
       const payload = isLocalOnly ? { password } : { email, password }
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
