@@ -9,6 +9,7 @@ RUN npm ci
 # Copy code and build
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_LOCAL_ONLY=true
 RUN npm run build
 
 # Stage 2: Production runner
