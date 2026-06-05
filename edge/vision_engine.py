@@ -1262,8 +1262,25 @@ async def main():
     print("="*60)
     rtsp = await fetch_rtsp_url()
     print(f"  [*] Stream: {rtsp}")
-    VideoCaptureThread(rtsp).start()
-    await asyncio.gather(inference_task(), stream_task())
+    video_thread = VideoCaptureThread(rtsp)
+    video_thread.start()
+
+    async def monitor_rtsp():
+        nonlocal video_thread
+        while True:
+            await asyncio.sleep(5)
+            try:
+                new_rtsp = await fetch_rtsp_url()
+                if new_rtsp != video_thread.rtsp_url:
+                    print(f"  [*] RTSP URL alterada. Reiniciando captura: {video_thread.rtsp_url} -> {new_rtsp}")
+                    video_thread.running = False
+                    await asyncio.sleep(1.5)
+                    video_thread = VideoCaptureThread(new_rtsp)
+                    video_thread.start()
+            except Exception as e:
+                print(f"  [CAM MONITOR] Erro ao verificar mudanca de camera: {e}")
+
+    await asyncio.gather(inference_task(), stream_task(), monitor_rtsp())
 
 
 if __name__ == "__main__":
