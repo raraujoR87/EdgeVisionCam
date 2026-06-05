@@ -18,6 +18,8 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
+  const isCloudMode = process.env.NEXT_PUBLIC_LOCAL_ONLY !== 'true'
+
   useEffect(() => {
     if (isLoginPage) {
       setIsLoading(false)
@@ -31,7 +33,8 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
       window.location.href = '/login'
     } else {
       // Validar sessão de forma unificada (local ou Supabase na nuvem)
-      fetch(getApiUrl('/api/auth/verify'), {
+      const verifyUrl = isCloudMode ? '/api/auth/verify' : getApiUrl('/api/auth/verify')
+      fetch(verifyUrl, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       .then(res => {
@@ -84,7 +87,6 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   }
 
   const isClient = user?.role === 'client'
-  const isCloudMode = process.env.NEXT_PUBLIC_LOCAL_ONLY !== 'true'
 
   return (
     <div className="pl-64 min-h-screen bg-slate-950 text-slate-100">
