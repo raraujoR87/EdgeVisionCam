@@ -1,6 +1,6 @@
 "use client"
 import React, { useState, useEffect } from 'react'
-import { Save, ShieldCheck, Key, MessageSquare, BrainCircuit, Loader2, CheckCircle2, MapPin, Camera } from 'lucide-react'
+import { Save, ShieldCheck, Key, MessageSquare, BrainCircuit, Loader2, CheckCircle2, MapPin, Camera, Terminal, RefreshCw } from 'lucide-react'
 import useSWR from 'swr'
 import { getApiUrl } from '../utils/api'
 
@@ -31,6 +31,34 @@ export default function EngineRoom() {
   const [saveSuccess, setSaveSuccess] = useState(false)
 
   const { data: config, mutate } = useSWR(getApiUrl('/api/config'), fetcher)
+
+  const [selectedLogContainer, setSelectedLogContainer] = useState('visioncam-core')
+  const [logsContent, setLogsContent] = useState('')
+  const [loadingLogs, setLoadingLogs] = useState(false)
+
+  const fetchLogs = async () => {
+    setLoadingLogs(true)
+    try {
+      const token = localStorage.getItem('admin_token')
+      const res = await fetch(getApiUrl(`/api/logs/${selectedLogContainer}`), {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setLogsContent(data.logs || 'No logs found.')
+      } else {
+        setLogsContent('Failed to fetch logs from endpoint.')
+      }
+    } catch (err) {
+      setLogsContent('Error connecting to backend logs API.')
+    } finally {
+      setLoadingLogs(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchLogs()
+  }, [selectedLogContainer])
 
   // Load existing config into state
   useEffect(() => {
@@ -208,6 +236,49 @@ export default function EngineRoom() {
             </button>
           </section>
         </div>
+
+        {/* Logs Console Card */}
+        <section className="bg-slate-900/50 border border-slate-800 rounded-[2rem] p-8 space-y-6 ring-1 ring-white/5 md:col-span-2">
+           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div className="flex items-center gap-3">
+                 <div className="bg-emerald-500/10 p-3 rounded-2xl border border-emerald-500/20">
+                    <Terminal className="text-emerald-500" size={24} />
+                 </div>
+                 <div>
+                    <h2 className="text-lg font-bold text-white uppercase tracking-tight">System Diagnostics</h2>
+                    <p className="text-xs text-slate-500 font-medium">Read live execution stdout/stderr logs from docker container nodes.</p>
+                 </div>
+              </div>
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                 <select 
+                    value={selectedLogContainer} 
+                    onChange={e => setSelectedLogContainer(e.target.value)}
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs text-white font-bold outline-none cursor-pointer focus:border-indigo-500 w-full sm:w-auto"
+                 >
+                    <option value="visioncam-core">Core Service (Backend/Bridge)</option>
+                    <option value="visioncam-ui-local">UI Console (Frontend)</option>
+                    <option value="visioncam-frigate">Frigate NVR</option>
+                 </select>
+                 <button 
+                    onClick={fetchLogs} 
+                    disabled={loadingLogs}
+                    className="bg-white/10 hover:bg-white/20 text-white px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 shrink-0"
+                 >
+                    {loadingLogs ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+                    Refresh
+                 </button>
+              </div>
+           </div>
+
+           <div className="relative">
+              <textarea 
+                 readOnly
+                 className="w-full h-80 bg-slate-950 border border-slate-800 rounded-2xl p-5 text-[11px] font-mono text-emerald-400 focus:outline-none overflow-y-auto resize-none"
+                 value={logsContent}
+                 placeholder="Console inactive. Select a node to stream log outputs..."
+              />
+           </div>
+        </section>
       </div>
     </div>
   )

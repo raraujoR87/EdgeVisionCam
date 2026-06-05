@@ -224,7 +224,7 @@ export default function ZoneSetup() {
         {/* Main Interface */}
         <div className="xl:col-span-8 space-y-6">
           <div className="group relative aspect-video bg-black rounded-[3rem] overflow-hidden border-4 border-slate-800/50 shadow-[0_0_100px_-12px_rgba(0,0,0,0.8)] ring-1 ring-white/10">
-             {engineOnline ? (
+             {apiOnline ? (
                <img 
                  src={getStreamUrl()} 
                  alt="Stream" 

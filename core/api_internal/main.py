@@ -237,6 +237,54 @@ async def get_engine_status():
     global latest_frame_bytes, engine_ready
     return {"online": latest_frame_bytes is not None, "ready": engine_ready}
 
+@app.get("/api/logs/{container_name}")
+async def get_container_logs(container_name: str, request: Request):
+    await verify_token(request)
+    import socket
+    socket_path = "/var/run/docker.sock"
+    if not os.path.exists(socket_path):
+        return {"logs": "Docker socket not available on this host. Cannot read container logs."}
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.connect(socket_path)
+        request_uri = f"/v1.41/containers/{container_name}/logs?stdout=true&stderr=true&tail=150"
+        req = (
+            f"GET {request_uri} HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Connection: close\r\n\r\n"
+        )
+        client.sendall(req.encode('utf-8'))
+        response_bytes = b""
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            response_bytes += chunk
+        client.close()
+        
+        parts = response_bytes.split(b"\r\n\r\n", 1)
+        if len(parts) < 2:
+            return {"logs": "Invalid response from Docker daemon."}
+        
+        body = parts[1]
+        cleaned_logs = []
+        i = 0
+        while i < len(body):
+            if i + 8 <= len(body) and body[i] in (0, 1, 2) and body[i+1] == 0 and body[i+2] == 0 and body[i+3] == 0:
+                size = int.from_bytes(body[i+4:i+8], byteorder='big')
+                frame = body[i+8:i+8+size]
+                cleaned_logs.append(frame.decode('utf-8', errors='ignore'))
+                i += 8 + size
+            else:
+                remaining = body[i:]
+                cleaned_logs.append(remaining.decode('utf-8', errors='ignore'))
+                break
+                
+        return {"logs": "".join(cleaned_logs)}
+    except Exception as e:
+        print(f"  [DOCKER ERROR] Failed to fetch logs for {container_name}: {e}")
+        return {"logs": f"Error fetching logs: {str(e)}"}
+
 @app.post("/api/internal/frame")
 async def receive_frame(request: Request):
     global latest_frame_bytes, frame_count
