@@ -52,6 +52,7 @@ services:
       - db_data:/app/core/database/data
       - ./storage/events:/app/edge/storage/events
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./frigate_config.yml:/app/frigate_config.yml
     ports:
       - "8090:8090"
       - "8000:8000"
