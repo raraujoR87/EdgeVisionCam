@@ -31,13 +31,15 @@ export default function EngineRoom() {
   const [saveSuccess, setSaveSuccess] = useState(false)
 
   const { data: config, mutate } = useSWR(getApiUrl('/api/config'), fetcher)
+  const { data: engineStatus } = useSWR(getApiUrl('/api/engine/status'), fetcher, { refreshInterval: 2000 })
 
   const [selectedLogContainer, setSelectedLogContainer] = useState('visioncam-core')
   const [logsContent, setLogsContent] = useState('')
   const [loadingLogs, setLoadingLogs] = useState(false)
+  const [autoRefresh, setAutoRefresh] = useState(true)
 
-  const fetchLogs = async () => {
-    setLoadingLogs(true)
+  const fetchLogs = async (showLoading = true) => {
+    if (showLoading) setLoadingLogs(true)
     try {
       const token = localStorage.getItem('admin_token')
       const res = await fetch(getApiUrl(`/api/logs/${selectedLogContainer}`), {
@@ -52,13 +54,21 @@ export default function EngineRoom() {
     } catch (err) {
       setLogsContent('Error connecting to backend logs API.')
     } finally {
-      setLoadingLogs(false)
+      if (showLoading) setLoadingLogs(false)
     }
   }
 
   useEffect(() => {
-    fetchLogs()
+    fetchLogs(true)
   }, [selectedLogContainer])
+
+  useEffect(() => {
+    if (!autoRefresh) return
+    const interval = setInterval(() => {
+      fetchLogs(false)
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [selectedLogContainer, autoRefresh])
 
   // Load existing config into state
   useEffect(() => {
@@ -246,10 +256,30 @@ export default function EngineRoom() {
                  </div>
                  <div>
                     <h2 className="text-lg font-bold text-white uppercase tracking-tight">System Diagnostics</h2>
-                    <p className="text-xs text-slate-500 font-medium">Read live execution stdout/stderr logs from docker container nodes.</p>
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <p className="text-xs text-slate-500 font-medium">Read live execution stdout/stderr logs from docker container nodes.</p>
+                      <div className="hidden sm:block text-slate-700">•</div>
+                      <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[9px] font-black tracking-wider uppercase border ${
+                        engineStatus?.online 
+                          ? engineStatus?.ready 
+                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                            : 'bg-amber-500/10 border-amber-500/20 text-amber-400 animate-pulse'
+                          : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                      }`}>
+                        <div className={`w-1.5 h-1.5 rounded-full ${
+                          engineStatus?.online 
+                            ? engineStatus?.ready ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'
+                            : 'bg-rose-400'
+                        }`} />
+                        {engineStatus?.online 
+                          ? engineStatus?.ready ? 'AI Engine: Active' : 'AI Engine: Initializing'
+                          : 'AI Engine: Offline'
+                        }
+                      </div>
+                    </div>
                  </div>
               </div>
-              <div className="flex items-center gap-3 w-full sm:w-auto">
+              <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
                  <select 
                     value={selectedLogContainer} 
                     onChange={e => setSelectedLogContainer(e.target.value)}
@@ -259,10 +289,19 @@ export default function EngineRoom() {
                     <option value="visioncam-ui-local">UI Console (Frontend)</option>
                     <option value="visioncam-frigate">Frigate NVR</option>
                  </select>
+                 <label className="flex items-center gap-2 cursor-pointer bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 shrink-0 select-none">
+                    <input 
+                       type="checkbox" 
+                       checked={autoRefresh} 
+                       onChange={e => setAutoRefresh(e.target.checked)}
+                       className="rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                    />
+                    <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">Auto-Refresh</span>
+                 </label>
                  <button 
-                    onClick={fetchLogs} 
+                    onClick={() => fetchLogs(true)} 
                     disabled={loadingLogs}
-                    className="bg-white/10 hover:bg-white/20 text-white px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 shrink-0"
+                    className="bg-white/10 hover:bg-white/20 text-white px-5 py-3 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 shrink-0 w-full sm:w-auto justify-center"
                  >
                     {loadingLogs ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
                     Refresh
