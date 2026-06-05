@@ -1,9 +1,6 @@
 import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
 import './globals.css'
 import ClientLayout from './client-layout'
-
-const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'VisionCam SOC',
@@ -17,7 +14,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body className={inter.className}>
+      <body className="antialiased">
         <ClientLayout>{children}</ClientLayout>
       </body>
     </html>
