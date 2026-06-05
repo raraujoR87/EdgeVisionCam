@@ -11,6 +11,7 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NEXT_PUBLIC_LOCAL_ONLY=true
 RUN npm run build
+RUN mkdir -p .next/server && echo "[]" > .next/server/font-manifest.json
 
 # Stage 2: Production runner
 FROM node:20-alpine AS runner
