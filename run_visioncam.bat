@@ -31,15 +31,19 @@ start "VisionCam: API" cmd /k ".\venv\Scripts\activate && python core/api_intern
 timeout /t 3 /nobreak >nul
 
 :: 3. VISION ENGINE (YOLO-Pose)
-echo [2/4] Initializing Biomechanical Vision Engine...
+echo [2/5] Initializing Biomechanical Vision Engine...
 start "VisionCam: Vision Engine" cmd /k ".\venv\Scripts\activate && python edge/vision_engine.py"
 
-:: 4. COGNITIVE BRAIN (LangGraph)
-echo [3/4] Initializing LangGraph Orchestrator...
+:: 4. FRIGATE WEBHOOK BRIDGE (Port 8090)
+echo [3/5] Launching Frigate Webhook Bridge...
+start "VisionCam: Frigate Bridge" cmd /k ".\venv\Scripts\activate && python edge/frigate_bridge.py"
+
+:: 5. COGNITIVE BRAIN (LangGraph)
+echo [4/5] Initializing LangGraph Orchestrator...
 start "VisionCam: Brain" cmd /k ".\venv\Scripts\activate && python core/graph/agent.py"
 
-:: 5. DASHBOARD (Port 3000)
-echo [4/4] Launching Enterprise SOC Dashboard...
+:: 6. DASHBOARD (Port 3000)
+echo [5/5] Launching Enterprise SOC Dashboard...
 cd ui
 start "VisionCam: UI Dashboard" cmd /k "set NEXT_PUBLIC_LOCAL_ONLY=true&& npm run dev"
 
