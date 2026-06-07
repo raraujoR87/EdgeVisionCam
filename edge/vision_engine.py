@@ -824,8 +824,8 @@ class DetectionAgentThread(threading.Thread):
         print("  [V6] [DETECT-AGENT] Warmup (primeira inferencia)...")
         t2 = time.time()
         dummy = np.zeros((TARGET_H, TARGET_W, 3), dtype=np.uint8)
-        model_pose.track(dummy, persist=True, verbose=False, conf=0.35, tracker="botsort.yaml")
-        model_obj(dummy, verbose=False, conf=0.20)
+        model_pose.track(dummy, imgsz=320, persist=True, verbose=False, conf=0.35, tracker="botsort.yaml")
+        model_obj(dummy, imgsz=320, verbose=False, conf=0.20)
         print(f"  [V6] [DETECT-AGENT] Warmup completo em {time.time()-t2:.1f}s")
 
         # Signal ready to API
@@ -846,13 +846,23 @@ class DetectionAgentThread(threading.Thread):
         drift_calibrated = False
         frame_counter = 0
 
+        # Frame rate limiter for NPU/CPU efficiency
+        last_inference = 0
+        inference_interval = 0.200 # 200ms -> 5 FPS (highly efficient)
+
         while self.running:
             try:
+                now = time.time()
+                if now - last_inference < inference_interval:
+                    time.sleep(0.015)
+                    continue
+
                 if latest_raw_frame is None:
                     time.sleep(0.01)
                     continue
 
                 frame = latest_raw_frame.copy()
+                last_inference = now
                 frame_counter += 1
 
                 # ── Stabilize / Compute Camera Drift ──
@@ -890,9 +900,9 @@ class DetectionAgentThread(threading.Thread):
                     cv2.putText(frame, f"DRIFT: dx={dx} dy={dy}", (10, 30), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-                res_pose = model_pose.track(frame, persist=True, verbose=False,
+                res_pose = model_pose.track(frame, imgsz=320, persist=True, verbose=False,
                                              conf=0.35, tracker="botsort.yaml")
-                res_obj  = model_obj(frame, verbose=False, conf=0.20)
+                res_obj  = model_obj(frame, imgsz=320, verbose=False, conf=0.20)
 
                 active_pids = []
                 person_heads = {}

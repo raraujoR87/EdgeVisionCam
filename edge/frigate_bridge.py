@@ -90,7 +90,7 @@ def analyze_and_enqueue_clip(event_id: str, camera: str, label: str):
                 break
             
             if frame_idx % 3 == 0:
-                res_pose = model_pose(frame, verbose=False, conf=0.35)
+                res_pose = model_pose(frame, imgsz=320, verbose=False, conf=0.35)
                 
                 # Check wrists and hips distance, object overlap, etc.
                 if len(res_pose) > 0 and res_pose[0].boxes is not None and len(res_pose[0].boxes) > 0:
