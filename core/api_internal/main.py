@@ -193,6 +193,11 @@ class ChangePasswordPayload(BaseModel):
 SESSION_SECRET = ""
 INTERNAL_SECRET = ""
 
+# Espelha config.password_is_default. Enquanto verdadeiro, a sessao autentica
+# mas so pode trocar a senha — ver `verify_token`. Mantido em memoria porque e
+# consultado em toda chamada protegida.
+PASSWORD_IS_DEFAULT = True
+
 
 def extract_token(request: Request, allow_query: bool = False) -> str:
     """
@@ -211,12 +216,25 @@ def extract_token(request: Request, allow_query: bool = False) -> str:
     return ""
 
 
-async def verify_token(request: Request, allow_query: bool = False):
+async def verify_token(
+    request: Request, allow_query: bool = False, allow_default_password: bool = False
+):
     token = extract_token(request, allow_query=allow_query)
     if not token:
         raise HTTPException(status_code=401, detail="Token ausente ou inválido")
     if not validate_token(SESSION_SECRET, token):
         raise HTTPException(status_code=401, detail="Sessão expirada ou inválida")
+
+    # Um appliance com a senha de fabrica e equivalente a um appliance sem
+    # senha: a credencial e publica. A sessao existe, mas nao abre nada alem da
+    # propria troca de senha — a checagem fica aqui, e nao so na UI, para que
+    # nenhum cliente consiga pular a etapa chamando a API direto.
+    if PASSWORD_IS_DEFAULT and not allow_default_password:
+        raise HTTPException(
+            status_code=403,
+            detail="Troca de senha obrigatória antes de usar o sistema",
+        )
+
     return token
 
 
@@ -232,7 +250,7 @@ async def verify_internal(request: Request):
 
 async def startup():
     """Cria o schema e carrega os segredos. Chamada pelo lifespan da app."""
-    global SESSION_SECRET, INTERNAL_SECRET
+    global SESSION_SECRET, INTERNAL_SECRET, PASSWORD_IS_DEFAULT
     await init_db()
 
     db = await get_system_db()
@@ -245,8 +263,10 @@ async def startup():
         row = await cursor.fetchone()
     await db.close()
 
-    if row and row['value'] == 'true':
-        print("  [AVISO] O appliance ainda usa a senha padrão. Troque-a em Settings.")
+    PASSWORD_IS_DEFAULT = bool(row) and row['value'] == 'true'
+
+    if PASSWORD_IS_DEFAULT:
+        print("  [AVISO] Senha de fábrica em uso. O sistema fica bloqueado até a troca.")
 
     print("  [OK] SOC API Gateway is ready.")
 
@@ -271,16 +291,26 @@ async def auth_login(payload: LoginPayload):
         print("  [AUTH] Hash de senha migrado de SHA-256 para PBKDF2.")
 
     await db.close()
-    return {"status": "success", "token": issue_token(SESSION_SECRET)}
+    # `must_change_password` diz a UI para levar direto a tela de troca. A
+    # recusa de verdade acontece no servidor, em verify_token.
+    return {
+        "status": "success",
+        "token": issue_token(SESSION_SECRET),
+        "must_change_password": PASSWORD_IS_DEFAULT,
+    }
 
 @app.get("/api/auth/verify")
 async def auth_verify(request: Request):
-    await verify_token(request)
-    return {"status": "valid"}
+    # Aceita a sessao mesmo com senha de fabrica para que a UI consiga
+    # distinguir "token invalido" de "precisa trocar a senha".
+    await verify_token(request, allow_default_password=True)
+    return {"status": "valid", "must_change_password": PASSWORD_IS_DEFAULT}
 
 @app.post("/api/auth/change-password")
 async def change_password(payload: ChangePasswordPayload, request: Request):
-    await verify_token(request)
+    global PASSWORD_IS_DEFAULT
+    # Unico endpoint acessivel enquanto a senha de fabrica estiver em uso.
+    await verify_token(request, allow_default_password=True)
 
     if len(payload.new_password) < 8:
         raise HTTPException(
@@ -305,11 +335,37 @@ async def change_password(payload: ChangePasswordPayload, request: Request):
     )
     await db.commit()
     await db.close()
+
+    # Libera o restante da API na mesma requisicao, sem exigir novo login.
+    PASSWORD_IS_DEFAULT = False
     return {"status": "success"}
+
+# Chaves que a UI tem permissao para gravar. A tabela `config` tambem guarda os
+# segredos de sessao e o hash da senha; sem esta lista, um POST bastaria para
+# sobrescrever a chave que assina os tokens ou plantar um hash conhecido.
+CONFIG_WRITABLE_KEYS = {
+    "gemini_api_key",
+    "telegram_bot_token",
+    "telegram_chat_id",
+    "brain_rules",
+    "camera_name",
+    "route_left",
+    "route_right",
+    "model_source",
+    "enable_fallback",
+    "cloud_api_url",
+    "store_api_key",
+    "rtsp_url",
+}
+
 
 @app.post("/api/config")
 async def save_config(payload: ConfigPayload, request: Request):
     await verify_token(request)
+    if payload.key not in CONFIG_WRITABLE_KEYS:
+        raise HTTPException(
+            status_code=400, detail=f"Chave de configuração não permitida: {payload.key}"
+        )
     db = await get_system_db()
     await db.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (payload.key, payload.value))
     await db.commit()

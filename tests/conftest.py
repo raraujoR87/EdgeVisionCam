@@ -43,10 +43,50 @@ def api_client(tmp_path, monkeypatch):
         yield client
 
 
+SENHA_DE_TESTE = "SenhaDeTeste2026"
+
+
 @pytest.fixture()
-def auth_token(api_client):
-    """Token de sessao valido, obtido com a senha padrao de fabrica."""
+def senha_configurada():
+    """
+    A senha definida por `auth_token`.
+
+    Exposta como fixture, e nao importada do conftest: existe um pacote `tests`
+    instalado no site-packages deste ambiente, e o import por nome resolvia para
+    ele em vez de para este arquivo.
+    """
+    return SENHA_DE_TESTE
+
+
+@pytest.fixture()
+def token_senha_padrao(api_client):
+    """
+    Token emitido com a senha de fabrica ainda ativa.
+
+    Autentica, mas o appliance so libera a troca de senha nesse estado — use
+    `auth_token` para exercitar o restante da API.
+    """
     resp = api_client.post("/api/auth/login", json={"password": "admin"})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["token"]
+
+
+@pytest.fixture()
+def auth_token(api_client, token_senha_padrao):
+    """
+    Token de uma instalacao ja configurada.
+
+    Troca a senha de fabrica primeiro, porque o sistema fica bloqueado enquanto
+    ela estiver em uso — que e exatamente o estado de um appliance recem-ligado.
+    """
+    resp = api_client.post(
+        "/api/auth/change-password",
+        json={"old_password": "admin", "new_password": SENHA_DE_TESTE},
+        headers={"Authorization": f"Bearer {token_senha_padrao}"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = api_client.post("/api/auth/login", json={"password": SENHA_DE_TESTE})
     assert resp.status_code == 200, resp.text
     return resp.json()["token"]
 
