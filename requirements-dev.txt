@@ -1,0 +1,6 @@
+# Dependencias exclusivas de desenvolvimento e CI.
+# A imagem de producao instala apenas requirements.txt.
+-r requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0

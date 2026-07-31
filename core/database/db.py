@@ -1,5 +1,9 @@
 import aiosqlite
 import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from core.security import hash_password
 
 DB_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DB_DIR, exist_ok=True)
@@ -55,7 +59,11 @@ async def init_db():
             "route_left": "Esquerda",
             "route_right": "Direita",
             "brain_rules": "Analyze for shoplifting or product concealment.",
-            "admin_password_hash": "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918", # sha256("admin")
+            # Senha inicial "admin", com hash gerado em tempo de execucao para
+            # que nenhum digest fique fixo no fonte. O flag abaixo permite a UI
+            # cobrar a troca antes de colocar o appliance em producao.
+            "admin_password_hash": hash_password("admin"),
+            "password_is_default": "true",
             "cloud_api_url": "https://api.visioncam.com.br/v1",
             "store_api_key": "vc_key_tok_loja_centro_001"
         }

@@ -230,7 +230,11 @@ export default function ZoneSetup() {
                  alt="Stream" 
                  className="w-full h-full object-fill opacity-90 transition-opacity group-hover:opacity-100 animate-in fade-in duration-700" 
                  onError={(e) => {
-                   (e.target as HTMLImageElement).src = getApiUrl('/video_feed');
+                   // Fallback para o MJPEG da engine quando o Frigate nao responde.
+                   // A tag <img> nao envia headers, entao o token vai na query
+                   // string — o unico endpoint que aceita essa forma.
+                   const t = localStorage.getItem('admin_token') || '';
+                   (e.target as HTMLImageElement).src = getApiUrl(`/video_feed?token=${encodeURIComponent(t)}`);
                  }}
                />
              ) : (

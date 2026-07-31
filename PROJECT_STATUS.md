@@ -12,7 +12,7 @@ O projeto é um appliance de segurança autônomo projetado para rodar integralm
 - **Backend:** Python 3.11+ (FastAPI).
 - **Frontend:** React/Next.js (App Router, TailwindCSS, Glassmorphism).
 - **Banco de Dados:** SQLite Assíncrono (`aiosqlite`) - SSOT (Single Source of Truth).
-- **Visão Computacional:** OpenCV + YOLOv8 (Ultralytics).
+- **Visão Computacional:** OpenCV + YOLO26 (Ultralytics) — modelos `yolo26n-pose` (pose) e `yolo26s` (objetos).
 - **Cérebro Cognitivo:** LangGraph (StateGraph) + Gemini 1.5 Flash (via novo SDK `google-genai`).
 
 ---
@@ -49,5 +49,65 @@ O projeto é um appliance de segurança autônomo projetado para rodar integralm
 
 ---
 
-## 6. Estado Atual do Deployment
+## 6. Modelo de Segurança
+
+O appliance possui **dois planos de autenticação independentes**, que nunca se
+substituem:
+
+| Plano | Quem usa | Mecanismo |
+|---|---|---|
+| **Sessão** | Operador via Dashboard | Token HMAC-SHA256 com validade de 12h, emitido por `/api/auth/login` |
+| **Interno** | Engine → API (`/api/internal/*`) | Segredo compartilhado no header `X-Internal-Token` |
+
+**Regras invioláveis:**
+- Senhas usam **PBKDF2-HMAC-SHA256 com salt por senha** (260k iterações). Hashes
+  SHA-256 de instalações antigas continuam válidos e migram sozinhos no primeiro
+  login bem-sucedido.
+- Os segredos de assinatura são **gerados na primeira execução** e gravados em
+  `system.db`. Nenhuma instalação compartilha chave com outra, e nenhum digest
+  fica fixo no código-fonte.
+- `/api/config` **nunca** devolve valores de segredo — apenas indicadores
+  `<chave>_is_set`. A lista está em `CONFIG_SECRET_KEYS`.
+- `/video_feed` aceita o token via query string porque a tag `<img>` do
+  dashboard não envia headers. **É o único endpoint com essa permissão.**
+- A senha inicial é `admin`, e o flag `password_is_default` fica `true` até a
+  primeira troca. **Trocar antes de colocar em produção.**
+
+### Modo nuvem (Vercel)
+Exige a variável de ambiente **`AUTH_SECRET`** (mínimo 32 caracteres). Sem ela a
+aplicação recusa autenticar — falha fechada por projeto, para que nenhum deploy
+rode com uma chave padrão previsível.
+
+---
+
+## 7. Testes
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+A suíte cobre as primitivas de autenticação, a superfície de autorização da API
+e o canal de métricas de inferência. Cada teste de segurança corresponde a um
+vetor concreto que já esteve aberto, então eles funcionam como trava de
+regressão — não como cobertura decorativa.
+
+---
+
+## 8. Estado Atual do Deployment
 O sistema está operando em modo **Res-Sync (640x480)**, garantindo que as zonas desenhadas no Dashboard correspondam perfeitamente à visão da IA. A sincronia entre a UI e a Engine ocorre em intervalos de 3 segundos sem necessidade de reiniciar os serviços.
+
+A inferência roda a **320x320, limitada a 5 FPS** (`inference_interval = 0.200`).
+Esse teto não é arbitrário: um ciclo completo (pose + objetos) mede
+**~143 ms em CPU**, valor agora reportado de verdade em `telemetry.inference_ms`.
+É a margem que justifica o trabalho de aceleração NPU descrito em
+`npu_compilation/` — enquanto o TODO de mapeamento de tensores em
+`edge/vivante_pose_engine.py` não for fechado, o sistema permanece em
+`CPU_FALLBACK`.
+
+### Operação offline
+Os pesos YOLO são baixados **durante o build da imagem**, não em runtime. Um
+appliance sem acesso à internet sobe normalmente. Ao alterar
+`POSE_MODEL_PATH`/`OBJ_MODEL_PATH`, atualize também a etapa de download no
+`Dockerfile` — caso contrário a engine volta a depender da rede no primeiro
+frame.

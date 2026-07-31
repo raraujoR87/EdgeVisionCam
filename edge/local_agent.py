@@ -33,6 +33,7 @@ from enum import Enum
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.database.db import get_queue_db
+from shared.metrics import get_avg_inference_ms
 
 EVENT_STORAGE = os.path.join(os.path.dirname(__file__), 'storage', 'events')
 os.makedirs(EVENT_STORAGE, exist_ok=True)
@@ -748,12 +749,17 @@ class LocalAgent:
                 if pose_model.endswith(".pt") or not os.path.exists("/dev/galcore"):
                     npu_status = "CPU_FALLBACK"
                 
+                # Latencia real medida pela engine de visao. Ficava fixa em 0.0,
+                # o que tornava a coluna inutil para diagnosticar queda de
+                # desempenho no appliance.
+                inference_ms = get_avg_inference_ms()
+
                 # 1. Save to local SQLite
                 try:
                     db = await get_queue_db()
                     await db.execute(
                         "INSERT OR REPLACE INTO telemetry (timestamp, cpu_usage, ram_usage, inference_ms) VALUES (?, ?, ?, ?)",
-                        (time.time(), cpu, ram, 0.0)
+                        (time.time(), cpu, ram, inference_ms)
                     )
                     await db.commit()
                     await db.close()

@@ -2,6 +2,8 @@ import os
 import sys
 import json
 import asyncio
+import hmac
+from contextlib import asynccontextmanager
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -12,6 +14,16 @@ from typing import List, Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from core.database.db import init_db, get_system_db, get_queue_db
+from core.security import (
+    INTERNAL_SECRET_KEY,
+    SESSION_SECRET_KEY,
+    get_or_create_secret,
+    hash_password,
+    is_legacy_hash,
+    issue_token,
+    validate_token,
+    verify_password,
+)
 from shared.schemas import Zone, Point
 import re
 
@@ -127,11 +139,27 @@ def restart_frigate_container():
         print(f"  [DOCKER ERROR] Failed to restart visioncam-frigate container: {e}")
         return False
 
-app = FastAPI(title="VisionCam Edge-Safe API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # `on_event` esta depreciado no FastAPI e emitia aviso a cada boot.
+    await startup()
+    yield
+
+
+app = FastAPI(title="VisionCam Edge-Safe API", lifespan=lifespan)
+
+# O appliance e acessado pelo IP da LAN, que varia por instalacao, entao a
+# origem permissiva continua sendo o padrao. Os tokens viajam no header
+# Authorization (nunca em cookie), logo o navegador nao os anexa sozinho e
+# nao ha vetor de CSRF aqui. Instalacoes com origem fixa devem restringir
+# via ALLOWED_ORIGINS.
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -160,41 +188,85 @@ class ChangePasswordPayload(BaseModel):
     old_password: str
     new_password: str
 
-active_sessions = set()
+# Segredos carregados uma vez no startup e reutilizados a cada request, para
+# nao pagar um round-trip ao SQLite em toda chamada autenticada.
+SESSION_SECRET = ""
+INTERNAL_SECRET = ""
+
+
+def extract_token(request: Request) -> str:
+    """
+    Recupera o token do header Authorization ou, em ultimo caso, da query
+    string. A query string existe porque o <img> que consome o MJPEG nao
+    consegue enviar headers — nenhum outro endpoint deve depender dela.
+    """
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        return auth_header[7:].strip()
+    return request.query_params.get("token", "")
+
 
 async def verify_token(request: Request):
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    token = extract_token(request)
+    if not token:
         raise HTTPException(status_code=401, detail="Token ausente ou inválido")
-    token = auth_header.split(" ")[1]
-    if token not in active_sessions and token != "mock_test_admin_token":
+    if not validate_token(SESSION_SECRET, token):
         raise HTTPException(status_code=401, detail="Sessão expirada ou inválida")
     return token
 
-@app.on_event("startup")
+
+async def verify_internal(request: Request):
+    """
+    Protege os endpoints que so a engine local deve chamar. Sem isso, qualquer
+    um na rede consegue injetar frames arbitrarios no monitor do SOC.
+    """
+    provided = request.headers.get("X-Internal-Token", "")
+    if not provided or not hmac.compare_digest(provided, INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Chamada interna não autorizada")
+
+
 async def startup():
+    """Cria o schema e carrega os segredos. Chamada pelo lifespan da app."""
+    global SESSION_SECRET, INTERNAL_SECRET
     await init_db()
+
+    db = await get_system_db()
+    SESSION_SECRET = await get_or_create_secret(db, SESSION_SECRET_KEY)
+    INTERNAL_SECRET = await get_or_create_secret(db, INTERNAL_SECRET_KEY)
+
+    async with db.execute(
+        "SELECT value FROM config WHERE key = 'password_is_default'"
+    ) as cursor:
+        row = await cursor.fetchone()
+    await db.close()
+
+    if row and row['value'] == 'true':
+        print("  [AVISO] O appliance ainda usa a senha padrão. Troque-a em Settings.")
+
     print("  [OK] SOC API Gateway is ready.")
 
 @app.post("/api/auth/login")
 async def auth_login(payload: LoginPayload):
-    import hashlib
-    import uuid
-    input_hash = hashlib.sha256(payload.password.encode('utf-8')).hexdigest()
-    
     db = await get_system_db()
     async with db.execute("SELECT value FROM config WHERE key = 'admin_password_hash'") as cursor:
         row = await cursor.fetchone()
-    await db.close()
-    
-    db_hash = row['value'] if row else "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
-    
-    if input_hash == db_hash:
-        token = f"visioncam_tok_{uuid.uuid4().hex}"
-        active_sessions.add(token)
-        return {"status": "success", "token": token}
-    else:
+
+    stored = row['value'] if row else ""
+    if not stored or not verify_password(payload.password, stored):
+        await db.close()
         raise HTTPException(status_code=401, detail="Senha incorreta")
+
+    # Login valido com hash antigo: reescreve em PBKDF2 sem incomodar o usuario.
+    if is_legacy_hash(stored):
+        await db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('admin_password_hash', ?)",
+            (hash_password(payload.password),),
+        )
+        await db.commit()
+        print("  [AUTH] Hash de senha migrado de SHA-256 para PBKDF2.")
+
+    await db.close()
+    return {"status": "success", "token": issue_token(SESSION_SECRET)}
 
 @app.get("/api/auth/verify")
 async def auth_verify(request: Request):
@@ -204,21 +276,28 @@ async def auth_verify(request: Request):
 @app.post("/api/auth/change-password")
 async def change_password(payload: ChangePasswordPayload, request: Request):
     await verify_token(request)
-    import hashlib
-    old_hash = hashlib.sha256(payload.old_password.encode('utf-8')).hexdigest()
-    
+
+    if len(payload.new_password) < 8:
+        raise HTTPException(
+            status_code=400, detail="A nova senha deve ter ao menos 8 caracteres"
+        )
+
     db = await get_system_db()
     async with db.execute("SELECT value FROM config WHERE key = 'admin_password_hash'") as cursor:
         row = await cursor.fetchone()
-        
-    db_hash = row['value'] if row else "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
-    
-    if old_hash != db_hash:
+
+    stored = row['value'] if row else ""
+    if not stored or not verify_password(payload.old_password, stored):
         await db.close()
         raise HTTPException(status_code=400, detail="Senha antiga incorreta")
-        
-    new_hash = hashlib.sha256(payload.new_password.encode('utf-8')).hexdigest()
-    await db.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('admin_password_hash', ?)", (new_hash,))
+
+    await db.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('admin_password_hash', ?)",
+        (hash_password(payload.new_password),),
+    )
+    await db.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('password_is_default', 'false')"
+    )
     await db.commit()
     await db.close()
     return {"status": "success"}
@@ -288,6 +367,7 @@ async def get_container_logs(container_name: str, request: Request):
 @app.post("/api/internal/frame")
 async def receive_frame(request: Request):
     global latest_frame_bytes, frame_count
+    await verify_internal(request)
     latest_frame_bytes = await request.body()
     frame_count += 1
     if frame_count % 30 == 0:
@@ -297,6 +377,7 @@ async def receive_frame(request: Request):
 @app.post("/api/internal/engine-ready")
 async def engine_ready_signal(request: Request):
     global engine_ready
+    await verify_internal(request)
     engine_ready = True
     print("  [ENGINE] ✓ Engine pronta para detecção!")
     return {"status": "ready"}
@@ -317,7 +398,9 @@ async def frame_generator():
         await asyncio.sleep(0.05)
 
 @app.get("/video_feed")
-async def video_feed():
+async def video_feed(request: Request):
+    # Autenticado via ?token= porque a tag <img> do dashboard nao envia headers.
+    await verify_token(request)
     return StreamingResponse(frame_generator(), media_type='multipart/x-mixed-replace; boundary=frame')
 
 # --- CAMERA CONFIG ENDPOINTS ---
@@ -434,6 +517,19 @@ async def delete_zone(zone_id: int, request: Request):
     await db.close()
     return {"status": "success"}
 
+# A tabela `config` guarda material sensivel junto das preferencias. Estas
+# chaves nunca podem sair pela API: os segredos derrubariam a autenticacao
+# inteira se vazassem, e os tokens de terceiros dao acesso a servicos externos.
+CONFIG_SECRET_KEYS = {
+    SESSION_SECRET_KEY,
+    INTERNAL_SECRET_KEY,
+    "admin_password_hash",
+    "gemini_api_key",
+    "telegram_bot_token",
+    "store_api_key",
+}
+
+
 @app.get("/api/config")
 async def get_all_config(request: Request):
     await verify_token(request)
@@ -441,7 +537,17 @@ async def get_all_config(request: Request):
     async with db.execute("SELECT * FROM config") as cursor:
         rows = await cursor.fetchall()
     await db.close()
-    return {row['key']: row['value'] for row in rows}
+
+    # Segredos viram um booleano "esta configurado?", que e tudo que a UI
+    # precisa para renderizar o estado dos campos sem expor o valor.
+    result = {}
+    for row in rows:
+        key, value = row['key'], row['value']
+        if key in CONFIG_SECRET_KEYS:
+            result[f"{key}_is_set"] = bool(value)
+        else:
+            result[key] = value
+    return result
 
 @app.get("/api/events")
 async def list_events(request: Request, limit: int = 50):
@@ -480,8 +586,16 @@ async def telegram_webhook(payload: WebhookPayload):
     return {"status": "success"}
 
 @app.get("/media/{filename}")
-async def serve_video(filename: str):
-    file_path = os.path.join(EVENT_STORAGE, filename)
+async def serve_video(filename: str, request: Request):
+    # Clipes de evento sao material de investigacao: exigem sessao valida.
+    await verify_token(request)
+
+    # basename descarta qualquer tentativa de travessia de diretorio antes de
+    # tocarmos o disco; a checagem de prefixo cobre o resto.
+    safe_name = os.path.basename(filename)
+    file_path = os.path.abspath(os.path.join(EVENT_STORAGE, safe_name))
+    if not file_path.startswith(EVENT_STORAGE + os.sep):
+        raise HTTPException(status_code=400, detail="Caminho inválido")
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Video not found")
     return FileResponse(file_path, media_type="video/mp4")

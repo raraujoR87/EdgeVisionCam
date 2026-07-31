@@ -44,6 +44,11 @@ ui/npm-debug.log*
 ui/yarn-debug.log*
 ui/yarn-error.log*
 
+# Copias de seguranca versionadas a mao. O historico do git ja cumpre esse
+# papel; manter .bak/.vNN no repo so cria duvida sobre qual arquivo vale.
+*.bak
+*.v[0-9][0-9]
+
 # OS files
 .DS_Store
 Thumbs.db
