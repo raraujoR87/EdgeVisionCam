@@ -10,4 +10,15 @@ opencv-python==4.13.0.92
 numpy>=1.23.0
 httpx==0.28.1
 backoff==2.2.1
-aiosqlite==0.22.1
+
+# Dependencia transitiva de google-genai -> google-auth -> cryptography.
+# Nao e declarada como obrigatoria pelo google-auth, entao o pip aceita uma
+# instalacao quebrada do sistema e o import de core/graph/agent.py falha com
+# ModuleNotFoundError: No module named '_cffi_backend'. Pinado explicitamente.
+cryptography>=44.0.0
+cffi>=1.17.0
+
+# Exigida pelo tracker do ultralytics. Sem o pin, o ultralytics tenta baixa-la
+# via AutoUpdate na primeira inferencia — o que quebra o appliance de borda
+# quando ele sobe sem acesso a internet.
+lap>=0.5.12
