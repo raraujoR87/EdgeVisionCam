@@ -110,6 +110,43 @@ def test_video_feed_exige_token(api_client):
     assert api_client.get("/video_feed").status_code == 401
 
 
+def test_video_feed_aceita_token_na_query(api_client, auth_token):
+    """
+    A tag <img> do dashboard nao envia headers — este e o unico endpoint onde o
+    token pode viajar na URL.
+
+    A verificacao e feita sobre `verify_token`, e nao por uma requisicao real:
+    o MJPEG e um gerador infinito e o cliente de teste ficaria preso tentando
+    consumir o corpo da resposta.
+    """
+    import asyncio
+
+    import core.api_internal.main as api
+    from starlette.datastructures import Headers
+
+    class FakeRequest:
+        def __init__(self, query):
+            self.headers = Headers({})
+            self.query_params = query
+
+    # Com allow_query, o token da URL autentica.
+    assert asyncio.run(
+        api.verify_token(FakeRequest({"token": auth_token}), allow_query=True)
+    ) == auth_token
+
+    # Sem allow_query (padrao dos demais endpoints), o mesmo token e ignorado.
+    with pytest.raises(Exception):
+        asyncio.run(api.verify_token(FakeRequest({"token": auth_token})))
+
+
+def test_demais_endpoints_recusam_token_na_query(api_client, auth_token):
+    """Token em query string entra em log de acesso, entao o fallback fica
+    restrito ao stream."""
+    for rota in ("/api/cameras", "/api/config", "/api/events"):
+        resp = api_client.get(f"{rota}?token={auth_token}")
+        assert resp.status_code == 401, f"{rota} aceitou token pela query string"
+
+
 # ── Vazamento de configuracao ──────────────────────────────────────
 
 def test_config_nao_expoe_segredos(api_client, auth_headers):
