@@ -47,24 +47,26 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- ==============================================================================
--- Seeds de Inicialização
+-- Provisionamento
 -- ==============================================================================
-
--- Inserir Lojas de Teste
-INSERT INTO stores (id, name, location, api_key, portainer_endpoint, telegram_bot_token, telegram_chat_id)
-VALUES 
-(1, 'Supermercado Extra - Loja Centro', 'São Paulo - SP', 'vc_key_tok_loja_centro_001', 'https://portainer.visioncam.com.br/#/endpoints/1', '8522129486:AAGfNWwJXgtSmVk4Y-S33gJZJrqLHnExl18', '-1003776276819'),
-(2, 'Supermercado Pão de Açúcar - Pinheiros', 'São Paulo - SP', 'vc_key_tok_pinheiros_002', 'https://portainer.visioncam.com.br/#/endpoints/2', '8522129486:AAGfNWwJXgtSmVk4Y-S33gJZJrqLHnExl18', '-1003776276819')
-ON CONFLICT (api_key) DO NOTHING;
-
--- Inserir Usuários de Teste (Senha em texto puro comentada à direita)
--- Senhas: 
--- admin@visioncam.com.br -> admin
--- cliente1@extra.com.br -> client123
--- cliente2@pao.com.br -> client456
-INSERT INTO users (email, password_hash, store_id, role)
-VALUES
-('admin@visioncam.com.br', '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918', NULL, 'admin'),
-('cliente1@extra.com.br', '6106cf37d7a5b3a4a75abffc6f85eb3d7a868a8dc4e8c1cf07a4a9c680f4fcfc', 1, 'client'),
-('cliente2@pao.com.br', '140e4f4fb38ee09bbff54d3dbe3a84eb83b48f936c53549646c075f850e04746', 2, 'client')
-ON CONFLICT (email) DO NOTHING;
+--
+-- Este arquivo cria apenas a estrutura. Nenhum dado real de loja, credencial ou
+-- usuario e versionado aqui.
+--
+-- A versao anterior trazia seeds com um token de bot do Telegram e o chat ID do
+-- grupo de alertas em texto puro. Como o repositorio e publico, esses valores
+-- ficaram expostos e precisaram ser revogados — segredo em arquivo versionado
+-- deve ser tratado como comprometido a partir do primeiro push.
+--
+-- Para provisionar uma instalacao, use npm run seed (ui/scripts/seed.mjs), que
+-- le os valores do ambiente e gera a senha inicial do administrador.
+--
+-- Se preferir fazer manualmente, o molde e este — substituindo os valores:
+--
+--   INSERT INTO stores (name, location, api_key, telegram_bot_token, telegram_chat_id)
+--   VALUES ('<nome da loja>', '<cidade>', '<chave gerada>', '<token>', '<chat id>');
+--
+--   INSERT INTO users (email, password_hash, store_id, role)
+--   VALUES ('<email>', '<sha256 da senha>', NULL, 'admin');
+--
+-- ==============================================================================
