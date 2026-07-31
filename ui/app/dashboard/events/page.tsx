@@ -3,6 +3,7 @@ import { query } from '../../api/db';
 import { ShieldAlert, CheckCircle, AlertTriangle, Play, Calendar, MapPin } from 'lucide-react';
 import { cookies } from 'next/headers';
 import Link from 'next/link';
+import { verifyToken } from '../../api/auth/tokens';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,16 +37,11 @@ export default async function EventsPage({
   const cookieStore = cookies();
   const token = cookieStore.get('admin_token')?.value || '';
   
-  let user: { email: string; role: string; store_id: number | null } | null = null;
-  if (token && token.startsWith('visioncam_tok_')) {
-    try {
-      const base64Payload = token.replace('visioncam_tok_', '');
-      const decodedStr = Buffer.from(base64Payload, 'base64').toString('utf-8');
-      user = JSON.parse(decodedStr);
-    } catch (e) {
-      console.error('Falha ao decodificar token de sessão:', e);
-    }
-  }
+  // A assinatura e conferida antes de qualquer uso. Esta pagina decide o que o
+  // usuario pode ver a partir de `role` e `store_id`, entao confiar no conteudo
+  // do cookie sem validar permitiria forjar um administrador e ler os eventos
+  // de todas as lojas.
+  const user = verifyToken(token);
 
   const isLocalOnly = process.env.NEXT_PUBLIC_LOCAL_ONLY === 'true';
 
