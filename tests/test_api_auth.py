@@ -172,11 +172,15 @@ def test_config_nao_expoe_segredos(api_client, auth_headers):
 
 # ── Troca de senha ─────────────────────────────────────────────────
 
-def test_troca_de_senha_e_login_subsequente(api_client, auth_headers):
+def _headers(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_troca_de_senha_e_login_subsequente(api_client, token_senha_padrao):
     resp = api_client.post(
         "/api/auth/change-password",
         json={"old_password": "admin", "new_password": "NovaSenha2026"},
-        headers=auth_headers,
+        headers=_headers(token_senha_padrao),
     )
     assert resp.status_code == 200
 
@@ -184,30 +188,80 @@ def test_troca_de_senha_e_login_subsequente(api_client, auth_headers):
     assert api_client.post("/api/auth/login", json={"password": "admin"}).status_code == 401
 
 
-def test_troca_de_senha_rejeita_senha_curta(api_client, auth_headers):
+def test_troca_de_senha_rejeita_senha_curta(api_client, token_senha_padrao):
     resp = api_client.post(
         "/api/auth/change-password",
         json={"old_password": "admin", "new_password": "curta"},
-        headers=auth_headers,
+        headers=_headers(token_senha_padrao),
     )
     assert resp.status_code == 400
 
 
-def test_troca_de_senha_exige_senha_antiga(api_client, auth_headers):
+def test_troca_de_senha_exige_senha_antiga(api_client, token_senha_padrao):
     resp = api_client.post(
         "/api/auth/change-password",
         json={"old_password": "chute", "new_password": "NovaSenha2026"},
-        headers=auth_headers,
+        headers=_headers(token_senha_padrao),
     )
     assert resp.status_code == 400
 
 
-def test_flag_de_senha_padrao_baixa_apos_troca(api_client, auth_headers):
-    assert api_client.get("/api/config", headers=auth_headers).json()["password_is_default"] == "true"
-
-    api_client.post(
-        "/api/auth/change-password",
-        json={"old_password": "admin", "new_password": "NovaSenha2026"},
-        headers=auth_headers,
-    )
+def test_flag_de_senha_padrao_baixa_apos_troca(api_client, token_senha_padrao, auth_headers):
+    """`auth_headers` ja passa pela troca; aqui so confirmamos o efeito no flag."""
     assert api_client.get("/api/config", headers=auth_headers).json()["password_is_default"] == "false"
+
+
+# ── Bloqueio enquanto a senha de fabrica estiver em uso ────────────
+
+@pytest.mark.parametrize("metodo,rota", ENDPOINTS_PROTEGIDOS)
+def test_senha_padrao_bloqueia_o_sistema(api_client, token_senha_padrao, metodo, rota):
+    """
+    Um appliance com a senha de fabrica tem credencial publica. A sessao chega a
+    ser emitida, mas nao abre camera, zona nem evento — a recusa vem do servidor,
+    para que nenhum cliente pule a etapa chamando a API direto.
+    """
+    resp = getattr(api_client, metodo)(rota, headers=_headers(token_senha_padrao))
+
+    if rota == "/api/auth/verify":
+        # Excecao deliberada: a UI precisa distinguir "token invalido" de
+        # "precisa trocar a senha".
+        assert resp.status_code == 200
+        assert resp.json()["must_change_password"] is True
+    else:
+        assert resp.status_code == 403
+
+
+def test_login_sinaliza_troca_obrigatoria(api_client):
+    dados = api_client.post("/api/auth/login", json={"password": "admin"}).json()
+    assert dados["must_change_password"] is True
+
+
+def test_login_nao_sinaliza_troca_apos_configurar(api_client, auth_token, senha_configurada):
+    dados = api_client.post("/api/auth/login", json={"password": senha_configurada}).json()
+    assert dados["must_change_password"] is False
+
+
+def test_sistema_libera_apos_troca(api_client, auth_headers):
+    assert api_client.get("/api/cameras", headers=auth_headers).status_code == 200
+
+
+# ── Escrita em /api/config ─────────────────────────────────────────
+
+def test_config_recusa_chave_fora_da_lista(api_client, auth_headers):
+    """
+    Sem a lista de chaves gravaveis, um POST sobrescreveria o segredo que assina
+    os tokens ou plantaria um hash de senha conhecido.
+    """
+    for chave in ("session_secret", "internal_secret", "admin_password_hash", "password_is_default"):
+        resp = api_client.post(
+            "/api/config", json={"key": chave, "value": "invadido"}, headers=auth_headers
+        )
+        assert resp.status_code == 400, f"{chave} foi aceita para escrita"
+
+
+def test_config_aceita_chave_permitida(api_client, auth_headers):
+    resp = api_client.post(
+        "/api/config", json={"key": "camera_name", "value": "Loja Centro"}, headers=auth_headers
+    )
+    assert resp.status_code == 200
+    assert api_client.get("/api/config", headers=auth_headers).json()["camera_name"] == "Loja Centro"

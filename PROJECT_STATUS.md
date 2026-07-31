@@ -69,14 +69,33 @@ substituem:
 - `/api/config` **nunca** devolve valores de segredo — apenas indicadores
   `<chave>_is_set`. A lista está em `CONFIG_SECRET_KEYS`.
 - `/video_feed` aceita o token via query string porque a tag `<img>` do
-  dashboard não envia headers. **É o único endpoint com essa permissão.**
-- A senha inicial é `admin`, e o flag `password_is_default` fica `true` até a
-  primeira troca. **Trocar antes de colocar em produção.**
+  dashboard não envia headers. **É o único endpoint com essa permissão** —
+  token em URL vaza para log de acesso e histórico do navegador.
+- `POST /api/config` só grava chaves da lista `CONFIG_WRITABLE_KEYS`. Sem essa
+  restrição, um POST bastaria para sobrescrever a chave que assina os tokens.
+
+### Troca obrigatória da senha de fábrica
+A senha inicial é `admin` — pública, portanto equivalente a não ter senha.
+Enquanto `password_is_default` estiver `true`:
+
+- `/api/auth/login` responde com `must_change_password: true`;
+- `/api/auth/verify` continua respondendo 200, para que a UI distinga
+  *token inválido* de *precisa trocar a senha*;
+- **todo o resto da API responde 403.** Nenhuma câmera, zona ou evento fica
+  acessível.
+
+O bloqueio vive em `verify_token`, no servidor — a tela `/change-password` é a
+face dele, não o mecanismo. Chamar a API diretamente não pula a etapa.
 
 ### Modo nuvem (Vercel)
 Exige a variável de ambiente **`AUTH_SECRET`** (mínimo 32 caracteres). Sem ela a
 aplicação recusa autenticar — falha fechada por projeto, para que nenhum deploy
-rode com uma chave padrão previsível.
+rode com uma chave padrão previsível. Veja `ui/.env.example`.
+
+```bash
+# gere um valor distinto por ambiente
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+```
 
 ---
 
