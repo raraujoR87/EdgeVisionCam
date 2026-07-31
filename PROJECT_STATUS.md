@@ -118,11 +118,35 @@ O sistema está operando em modo **Res-Sync (640x480)**, garantindo que as zonas
 
 A inferência roda a **320x320, limitada a 5 FPS** (`inference_interval = 0.200`).
 Esse teto não é arbitrário: um ciclo completo (pose + objetos) mede
-**~143 ms em CPU**, valor agora reportado de verdade em `telemetry.inference_ms`.
-É a margem que justifica o trabalho de aceleração NPU descrito em
-`npu_compilation/` — enquanto o TODO de mapeamento de tensores em
-`edge/vivante_pose_engine.py` não for fechado, o sistema permanece em
-`CPU_FALLBACK`.
+**~120-145 ms em CPU**, valor agora reportado de verdade em
+`telemetry.inference_ms`. É a margem que justifica a aceleração NPU.
+
+### Aceleração NPU — estado real
+`edge/vivante_pose_engine.py` deixou de ser um esqueleto. O que está pronto e
+testado:
+
+- **Decodificador de saída** para os dois layouts YOLO-pose, escolhido pelo
+  formato do tensor: end-to-end `(N, 57)` do YOLO26 (NMS no grafo) e por
+  âncoras `(56, A)` do YOLOv8 (NMS na CPU). O layout foi verificado contra a
+  saída real do `yolo26n-pose.onnx`.
+- **Letterbox e volta ao espaço do frame.** Sem isso as caixas saem
+  distorcidas e não correspondem às zonas de guarda do dashboard.
+- **`track()`**, que não existia. `vision_engine` chama `model_pose.track(...)`
+  e lê `boxes.id` — com um `.nbg` configurado, a engine quebrava no warmup com
+  `AttributeError` antes de qualquer inferência.
+- **Rastreador por IoU** para gerar as identidades que o BoT-SORT fornece no
+  caminho de CPU.
+
+O que **não** foi validado, por depender do hardware: a execução no silício
+Vivante e o efeito da quantização INT8 sobre a precisão. O caminho completo foi
+exercitado com um grafo simulado que roda o ONNX real do mesmo modelo, e as
+caixas resultantes batem com a referência do ultralytics dentro de ~8px numa
+imagem de 1080px.
+
+**Antes de compilar**, decida o modelo em `npu_compilation/acuity_export_yolo.sh`:
+o YOLO26 é mais simples de pós-processar, mas compiladores de NPU costumam não
+suportar os operadores de NMS que ele embute no grafo. O YOLOv8 é o caminho
+seguro.
 
 ### Operação offline
 Os pesos YOLO são baixados **durante o build da imagem**, não em runtime. Um

@@ -30,6 +30,8 @@ core_agent_e2e.log
 
 # YOLO weights & models
 *.pt
+*.onnx
+*.nbg
 
 # Node.js (UI Dashboard)
 ui/node_modules/
