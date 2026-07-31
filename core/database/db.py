@@ -65,7 +65,11 @@ async def init_db():
             "admin_password_hash": hash_password("admin"),
             "password_is_default": "true",
             "cloud_api_url": "https://api.visioncam.com.br/v1",
-            "store_api_key": "vc_key_tok_loja_centro_001"
+            # Vazio de proposito: e emitido por loja pelo provisionamento da
+            # nuvem (ui/scripts/seed.mjs) e configurado em Settings. O valor
+            # fixo anterior fazia todo appliance se identificar como a mesma
+            # loja, colidindo a telemetria de todas as instalacoes.
+            "store_api_key": ""
         }
         for key, val in default_configs.items():
             await db.execute("INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (key, val))
