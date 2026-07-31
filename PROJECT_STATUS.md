@@ -143,10 +143,36 @@ exercitado com um grafo simulado que roda o ONNX real do mesmo modelo, e as
 caixas resultantes batem com a referência do ultralytics dentro de ~8px numa
 imagem de 1080px.
 
-**Antes de compilar**, decida o modelo em `npu_compilation/acuity_export_yolo.sh`:
-o YOLO26 é mais simples de pós-processar, mas compiladores de NPU costumam não
-suportar os operadores de NMS que ele embute no grafo. O YOLOv8 é o caminho
-seguro.
+**Modelo escolhido para a NPU: `yolov8n-pose`.** A saída por âncoras usa apenas
+operadores que o compilador Acuity suporta com segurança; o YOLO26 embute o NMS
+no grafo, e compiladores de NPU costumam rejeitar esses operadores. O decoder
+suporta os dois, então trocar depois é mudar uma variável — mas começar pelo
+YOLOv8 evita descobrir uma incompatibilidade só no `pegasus import`.
+
+Paridade medida contra o ultralytics na mesma imagem, com o ONNX real:
+
+| Modelo | Saída | IoU por caixa |
+|---|---|---|
+| `yolov8n-pose` | `(1, 56, 2100)` âncoras | 0.995 / 0.999 / 0.937 |
+| `yolo26n-pose` | `(1, 300, 57)` end-to-end | 0.997 / 0.988 / 0.910 |
+
+O resíduo vem do letterbox: o ultralytics usa retângulo alinhado ao stride
+(320x256), enquanto a NPU exige tensor de entrada quadrado de tamanho fixo.
+Não é erro de decodificação.
+
+### Pipeline de compilação
+```bash
+python3 npu_compilation/export_onnx.py            # 1. modelo → ONNX
+python3 npu_compilation/prepare_calibration.py    # 2. dataset de calibração
+bash    npu_compilation/acuity_export_yolo.sh     # 3. ONNX → NBG (Docker Acuity)
+export POSE_MODEL_PATH=edge/yolov8n-pose.nbg      # 4. aponta a engine
+```
+
+O passo 2 captura frames **da própria câmera da loja**, caindo para clipes de
+evento gravados e só então para imagens genéricas do COCO. Isso importa: a
+quantização INT8 dimensiona as escalas a partir dessas imagens, e calibrar com
+cenas que não parecem com a loja derruba a precisão no dispositivo — não no
+teste. O script avisa quando cai no COCO.
 
 ### Operação offline
 Os pesos YOLO são baixados **durante o build da imagem**, não em runtime. Um

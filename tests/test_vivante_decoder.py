@@ -161,6 +161,71 @@ def test_layout_bate_com_o_modelo_exportado():
     assert (no_frame[:, 1] >= 0).all() and (no_frame[:, 3] <= 1080 + 2).all()
 
 
+# ── Paridade contra os modelos ONNX reais ──────────────────────────
+
+ASSET_BUS = "/usr/local/lib/python3.11/dist-packages/ultralytics/assets/bus.jpg"
+
+
+def _iou_simples(a, b):
+    xx1, yy1 = max(a[0], b[0]), max(a[1], b[1])
+    xx2, yy2 = min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, xx2 - xx1) * max(0.0, yy2 - yy1)
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    return inter / (area_a + area_b - inter)
+
+
+@pytest.mark.parametrize("modelo", ["yolov8n-pose", "yolo26n-pose"])
+def test_decoder_reproduz_o_ultralytics(modelo):
+    """
+    Roda o ONNX real e compara as caixas do decodificador com as que o
+    ultralytics produz para a mesma imagem.
+
+    Cobre os dois layouts com dados reais — o caminho por ancoras (YOLOv8) e o
+    que `acuity_export_yolo.sh` compila por padrao, entao validar so o
+    end-to-end deixaria justamente o caminho de producao sem cobertura.
+
+    A diferenca residual vem do letterbox: o ultralytics usa retangulo alinhado
+    ao stride (320x256) e aqui o quadrado 320x320 e obrigatorio, porque a NPU
+    compila um tensor de entrada de tamanho fixo. Por isso a tolerancia e por
+    IoU, e nao por pixel.
+    """
+    ort = pytest.importorskip("onnxruntime")
+    pytest.importorskip("ultralytics")
+
+    raiz = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    onnx_path = os.path.join(raiz, f"{modelo}.onnx")
+    if not os.path.exists(onnx_path) or not os.path.exists(ASSET_BUS):
+        pytest.skip(f"requer {modelo}.onnx — gere com scripts/export_onnx.py")
+
+    import cv2
+    from ultralytics import YOLO
+
+    frame = cv2.imread(ASSET_BUS)
+    canvas, scale, pad_x, pad_y = letterbox(frame, 320)
+    blob = canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0
+
+    sessao = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+    raw = sessao.run(None, {"images": blob})[0]
+
+    boxes, scores, _, kpts, _ = decode_output(raw, conf_threshold=0.35)
+    obtidas = undo_letterbox_xy(boxes.reshape(-1, 2, 2), scale, pad_x, pad_y).reshape(-1, 4)
+
+    referencia = YOLO(os.path.join(raiz, f"{modelo}.pt"))(
+        frame, imgsz=320, verbose=False, conf=0.35
+    )[0].boxes.xyxy.cpu().numpy()
+
+    assert len(obtidas) == len(referencia), "contagem de detecções divergiu"
+
+    # Cada caixa precisa ter uma correspondente com sobreposicao alta. Abaixo de
+    # 0.9 o problema deixa de ser pre-processamento e passa a ser decodificacao.
+    for caixa in obtidas:
+        melhor = max(_iou_simples(caixa, r) for r in referencia)
+        assert melhor > 0.90, f"IoU {melhor:.3f} baixo demais para {modelo}"
+
+    assert kpts.shape[1:] == (NUM_KEYPOINTS, 2)
+
+
 # ── Caminho de NPU completo ────────────────────────────────────────
 
 def test_caminho_npu_completo_com_grafo_simulado():
