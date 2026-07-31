@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { query } from '../../db';
+import { query, isDatabaseNotConfigured } from '../../db';
 import { verifyToken } from '../tokens';
 
 /**
@@ -34,6 +34,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ status: 'valid', user: userRes.rows[0] });
   } catch (error: any) {
     console.error('[Verify API Error]', error);
+
+    if (isDatabaseNotConfigured(error)) {
+      return NextResponse.json(
+        { error: 'Banco de dados não configurado no servidor (DATABASE_URL ausente).' },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json({ error: 'Token inválido' }, { status: 401 });
   }
 }

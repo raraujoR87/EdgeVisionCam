@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { query } from '../../db';
+import { query, isDatabaseNotConfigured } from '../../db';
 import crypto from 'crypto';
 import { signToken } from '../tokens';
 
@@ -53,6 +53,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ status: 'success', token });
   } catch (error: any) {
     console.error('[Login API Error]', error);
+
+    // Falha de configuração não é falha de credencial. Dizer "senha incorreta"
+    // aqui manda o operador procurar defeito no lugar errado.
+    if (isDatabaseNotConfigured(error)) {
+      return NextResponse.json(
+        { error: 'Banco de dados não configurado no servidor (DATABASE_URL ausente).' },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json({ error: 'Erro interno no login' }, { status: 500 });
   }
 }

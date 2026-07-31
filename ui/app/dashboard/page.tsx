@@ -1,5 +1,5 @@
 import React from 'react';
-import { query } from '../api/db';
+import { query, isDatabaseNotConfigured } from '../api/db';
 import { Shield, Activity, Monitor, AlertOctagon, Terminal, ExternalLink, HelpCircle } from 'lucide-react';
 
 // Forçar Next.js a rodar de forma dinâmica (sem build cache estático)
@@ -21,6 +21,9 @@ interface StoreData {
 export default async function DashboardPage() {
   let stores: StoreData[] = [];
   let isOffline = false;
+  // Distingue "nenhuma loja cadastrada" de "banco inacessível". Tratar os dois
+  // como o mesmo estado esconde justamente o problema que precisa de ação.
+  let erroDeConfiguracao = false;
 
   try {
     const res = await query(`
@@ -80,6 +83,7 @@ export default async function DashboardPage() {
   } catch (err) {
     console.error('Falha ao consultar banco central', err);
     isOffline = true;
+    erroDeConfiguracao = isDatabaseNotConfigured(err);
   }
 
   // Métricas agregadas
@@ -103,7 +107,11 @@ export default async function DashboardPage() {
             Monitoramento de hardware, alertas e gestão de agentes de borda (Next.js + Vercel)
           </p>
         </div>
-        {isOffline && (
+        {erroDeConfiguracao ? (
+          <span className="px-3 py-1 bg-rose-950/40 text-rose-400 border border-rose-800/40 rounded-full text-xs font-bold font-mono">
+            ⚠️ DATABASE_URL AUSENTE — CONFIGURE E REFAÇA O DEPLOY
+          </span>
+        ) : isOffline && (
           <span className="px-3 py-1 bg-amber-950/40 text-amber-400 border border-amber-800/40 rounded-full text-xs font-bold font-mono">
             ⚠️ MODO DEMONSTRAÇÃO (BANCO DE CONEXÃO LOCAL)
           </span>
