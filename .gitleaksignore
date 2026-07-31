@@ -1,0 +1,13 @@
+# Achados já analisados e descartados, no formato commit:arquivo:regra:linha.
+#
+# A varredura do CI percorre o diff de cada commit do PR, então um valor
+# removido num commit posterior continua aparecendo no commit que o introduziu.
+# Este arquivo dispensa exatamente esses achados, sem afrouxar a regra.
+#
+# Só entram aqui valores comprovadamente inofensivos. Um segredo real que tenha
+# sido commitado precisa ser REVOGADO — silenciá-lo aqui deixaria a credencial
+# válida e o alerta invisível.
+
+# Placeholder de AUTH_SECRET no job de build da UI, removido em seguida por ser
+# desnecessário: a variável é lida em tempo de requisição, nunca no build.
+2125f9a9e0675b57b7d27af0caf3486974d20ab1:.github/workflows/ci.yml:generic-api-key:58

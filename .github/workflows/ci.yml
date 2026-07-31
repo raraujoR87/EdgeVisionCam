@@ -51,11 +51,10 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
+      # AUTH_SECRET nao entra aqui de proposito: e lida em tempo de requisicao,
+      # nunca no build. Um placeholder de alta entropia no workflow so serviria
+      # para a varredura de segredos apontar um falso positivo.
       - name: Build
-        # AUTH_SECRET nao e lido em build time, mas o valor precisa existir
-        # caso alguma rota passe a validar a configuracao no import.
-        env:
-          AUTH_SECRET: ci-placeholder-secret-com-32-caracteres-ou-mais
         run: npm run build
 
   seguranca:
@@ -67,7 +66,12 @@ jobs:
           # gitleaks compara commits; sem o historico ele nao tem o que varrer.
           fetch-depth: 0
 
+      # Varre apenas os commits do PR, o que impede a entrada de segredos novos.
+      # Segredos que já estão no histórico não são pegos aqui — para esses, a
+      # única resposta válida é revogar a credencial, já que reescrever o
+      # histórico não desfaz o que foi publicado.
       - name: gitleaks
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml

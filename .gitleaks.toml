@@ -1,0 +1,25 @@
+title = "VisionCam — configuração do gitleaks"
+
+# Parte das regras padrão e apenas acrescenta exceções. Nunca substitua o
+# conjunto padrão: é ele que reconhece tokens de Telegram, chaves de nuvem e
+# afins.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+Moldes de connection string na documentação. São endereços inventados que
+mostram o formato esperado — a regra `generic-api-key` os marca por entropia,
+sem distinguir um segredo real de um texto longo qualquer.
+
+A exceção é por regex, e não por caminho de arquivo, para que um segredo de
+verdade colocado nesses mesmos arquivos continue sendo detectado.
+
+Não adicione aqui nada que seja um segredo real: o lugar de um segredo é uma
+variável de ambiente, e um que já foi commitado precisa ser revogado, não
+silenciado.
+"""
+regexes = [
+  '''postgres://user:pass@host/db''',
+  '''postgres://\.\.\.''',
+]
