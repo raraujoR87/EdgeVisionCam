@@ -194,20 +194,25 @@ SESSION_SECRET = ""
 INTERNAL_SECRET = ""
 
 
-def extract_token(request: Request) -> str:
+def extract_token(request: Request, allow_query: bool = False) -> str:
     """
-    Recupera o token do header Authorization ou, em ultimo caso, da query
-    string. A query string existe porque o <img> que consome o MJPEG nao
-    consegue enviar headers — nenhum outro endpoint deve depender dela.
+    Recupera o token do header Authorization.
+
+    `allow_query` libera o fallback pela query string e existe unicamente para
+    o MJPEG, consumido por uma tag <img> que nao envia headers. Token em query
+    string vaza para log de acesso e historico do navegador, entao o resto da
+    API nao aceita essa forma.
     """
     auth_header = request.headers.get("Authorization")
     if auth_header and auth_header.startswith("Bearer "):
         return auth_header[7:].strip()
-    return request.query_params.get("token", "")
+    if allow_query:
+        return request.query_params.get("token", "")
+    return ""
 
 
-async def verify_token(request: Request):
-    token = extract_token(request)
+async def verify_token(request: Request, allow_query: bool = False):
+    token = extract_token(request, allow_query=allow_query)
     if not token:
         raise HTTPException(status_code=401, detail="Token ausente ou inválido")
     if not validate_token(SESSION_SECRET, token):
@@ -399,8 +404,9 @@ async def frame_generator():
 
 @app.get("/video_feed")
 async def video_feed(request: Request):
-    # Autenticado via ?token= porque a tag <img> do dashboard nao envia headers.
-    await verify_token(request)
+    # Unico endpoint que aceita ?token=, porque a tag <img> do dashboard nao
+    # consegue enviar o header Authorization.
+    await verify_token(request, allow_query=True)
     return StreamingResponse(frame_generator(), media_type='multipart/x-mixed-replace; boundary=frame')
 
 # --- CAMERA CONFIG ENDPOINTS ---
