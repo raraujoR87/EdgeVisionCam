@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Um push novo cancela a execucao anterior do mesmo branch: nada a ganhar
+# esperando o resultado de um commit que ja foi substituido.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Testes Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Instalar dependências
+        # requirements-dev.txt ja inclui requirements.txt. O indice de CPU do
+        # torch evita baixar ~2GB de pacotes CUDA que o runner nao usa.
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+
+      - name: Rodar a suíte
+        run: pytest
+
+  frontend:
+    name: Build da UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      # AUTH_SECRET nao entra aqui de proposito: e lida em tempo de requisicao,
+      # nunca no build. Um placeholder de alta entropia no workflow so serviria
+      # para a varredura de segredos apontar um falso positivo.
+      - name: Build
+        run: npm run build
+
+  seguranca:
+    name: Varredura de segredos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks compara commits; sem o historico ele nao tem o que varrer.
+          fetch-depth: 0
+
+      # Varre apenas os commits do PR, o que impede a entrada de segredos novos.
+      # Segredos que já estão no histórico não são pegos aqui — para esses, a
+      # única resposta válida é revogar a credencial, já que reescrever o
+      # histórico não desfaz o que foi publicado.
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml

@@ -33,3 +33,12 @@ edge/storage/
 *.log
 core_agent_e2e.log
 test_run.log
+
+# Pesos YOLO: quem os fornece e a etapa de download do Dockerfile, nao o
+# contexto de build. Enviar copias locais so incharia a imagem — e poderia
+# sobrescrever os pesos baixados por versoes desatualizadas da maquina de dev.
+*.pt
+
+# Testes nao vao para a imagem de producao
+tests/
+pytest.ini

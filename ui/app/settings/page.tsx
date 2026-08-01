@@ -73,8 +73,11 @@ export default function EngineRoom() {
   // Load existing config into state
   useEffect(() => {
     if (config) {
-      setGeminiKey(config.gemini_api_key || '')
-      setTelegramToken(config.telegram_bot_token || '')
+      // A API nunca devolve o valor dos segredos, apenas se ja existe um.
+      // Os campos ficam vazios de proposito e so sao gravados se o operador
+      // digitar algo novo — ver handleSaveAll.
+      setGeminiKey('')
+      setTelegramToken('')
       setChatId(config.telegram_chat_id || '')
       setBrainRules(config.brain_rules || '')
       setCameraName(config.camera_name || '')
@@ -102,8 +105,9 @@ export default function EngineRoom() {
     setSaveSuccess(false)
     try {
       await Promise.all([
-        saveConfig('gemini_api_key', geminiKey),
-        saveConfig('telegram_bot_token', telegramToken),
+        // Campo em branco significa "manter o segredo atual", nao "apagar".
+        ...(geminiKey ? [saveConfig('gemini_api_key', geminiKey)] : []),
+        ...(telegramToken ? [saveConfig('telegram_bot_token', telegramToken)] : []),
         saveConfig('telegram_chat_id', chatId),
         saveConfig('brain_rules', brainRules),
         saveConfig('camera_name', cameraName),
@@ -207,6 +211,7 @@ export default function EngineRoom() {
                   type="password" 
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-5 py-4 text-sm text-white focus:border-blue-500/50 outline-none transition-all"
                   value={geminiKey}
+                  placeholder={config?.gemini_api_key_is_set ? '•••••••• configurado — digite para substituir' : 'Não configurado'}
                   onChange={e => setGeminiKey(e.target.value)}
                 />
               </div>
@@ -217,6 +222,7 @@ export default function EngineRoom() {
                   type="password" 
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-5 py-4 text-sm text-white focus:border-blue-500/50 outline-none transition-all"
                   value={telegramToken}
+                  placeholder={config?.telegram_bot_token_is_set ? '•••••••• configurado — digite para substituir' : 'Não configurado'}
                   onChange={e => setTelegramToken(e.target.value)}
                 />
               </div>

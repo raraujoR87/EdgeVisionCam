@@ -30,6 +30,8 @@ core_agent_e2e.log
 
 # YOLO weights & models
 *.pt
+*.onnx
+*.nbg
 
 # Node.js (UI Dashboard)
 ui/node_modules/
@@ -43,6 +45,11 @@ ui/.env.production.local
 ui/npm-debug.log*
 ui/yarn-debug.log*
 ui/yarn-error.log*
+
+# Copias de seguranca versionadas a mao. O historico do git ja cumpre esse
+# papel; manter .bak/.vNN no repo so cria duvida sobre qual arquivo vale.
+*.bak
+*.v[0-9][0-9]
 
 # OS files
 .DS_Store

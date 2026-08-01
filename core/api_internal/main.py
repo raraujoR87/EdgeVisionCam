@@ -2,6 +2,8 @@ import os
 import sys
 import json
 import asyncio
+import hmac
+from contextlib import asynccontextmanager
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -11,7 +13,18 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from core import docker_client, retention
 from core.database.db import init_db, get_system_db, get_queue_db
+from core.security import (
+    INTERNAL_SECRET_KEY,
+    SESSION_SECRET_KEY,
+    get_or_create_secret,
+    hash_password,
+    is_legacy_hash,
+    issue_token,
+    validate_token,
+    verify_password,
+)
 from shared.schemas import Zone, Point
 import re
 
@@ -104,34 +117,74 @@ def generate_frigate_config():
         import traceback; traceback.print_exc()
         return False
 
-def restart_frigate_container():
-    import socket
-    socket_path = "/var/run/docker.sock"
-    if not os.path.exists(socket_path):
-        print("  [DOCKER] Socket not found at /var/run/docker.sock, skipping container restart.")
-        return False
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        request = (
-            "POST /v1.41/containers/visioncam-frigate/restart HTTP/1.1\r\n"
-            "Host: localhost\r\n"
-            "Connection: close\r\n\r\n"
-        )
-        client.sendall(request.encode('utf-8'))
-        response = client.recv(4096).decode('utf-8', errors='ignore')
-        client.close()
-        print(f"  [DOCKER] Frigate container restart command sent: {response.splitlines()[0]}")
-        return True
-    except Exception as e:
-        print(f"  [DOCKER ERROR] Failed to restart visioncam-frigate container: {e}")
-        return False
+# Containers do proprio appliance, os unicos cujos logs o console expoe.
+# Precisa acompanhar os container_name do docker-compose.yml e as opcoes do
+# seletor em ui/app/settings/page.tsx.
+CONTAINERS_VISIVEIS = {
+    "visioncam-core",
+    "visioncam-ui-local",
+    "visioncam-frigate",
+    "visioncam-mqtt",
+}
 
-app = FastAPI(title="VisionCam Edge-Safe API")
+
+def restart_frigate_container():
+    return docker_client.reiniciar_container("visioncam-frigate")
+
+async def laco_de_retencao():
+    """
+    Expurga eventos vencidos uma vez por hora.
+
+    Roda dentro da API porque é o processo que já tem o banco aberto e vida
+    longa. De hora em hora é suficiente: o prazo é medido em dias, e uma
+    varredura mais frequente só gastaria I/O do cartão.
+    """
+    while True:
+        try:
+            db_sys = await get_system_db()
+            async with db_sys.execute(
+                "SELECT value FROM config WHERE key = 'retention_days'"
+            ) as cursor:
+                linha = await cursor.fetchone()
+            await db_sys.close()
+
+            dias = retention.normalizar_dias(linha["value"] if linha else None)
+
+            db_fila = await get_queue_db()
+            await retention.expurgar(db_fila, dias, EVENT_STORAGE)
+            await db_fila.close()
+        except Exception as erro:
+            # Falha no expurgo não pode derrubar a API — mas precisa aparecer.
+            print(f"  [RETENÇÃO ERRO] {erro}")
+
+        await asyncio.sleep(3600)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # `on_event` esta depreciado no FastAPI e emitia aviso a cada boot.
+    await startup()
+    tarefa = asyncio.create_task(laco_de_retencao())
+    try:
+        yield
+    finally:
+        tarefa.cancel()
+
+
+app = FastAPI(title="VisionCam Edge-Safe API", lifespan=lifespan)
+
+# O appliance e acessado pelo IP da LAN, que varia por instalacao, entao a
+# origem permissiva continua sendo o padrao. Os tokens viajam no header
+# Authorization (nunca em cookie), logo o navegador nao os anexa sozinho e
+# nao ha vetor de CSRF aqui. Instalacoes com origem fixa devem restringir
+# via ALLOWED_ORIGINS.
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -160,72 +213,205 @@ class ChangePasswordPayload(BaseModel):
     old_password: str
     new_password: str
 
-active_sessions = set()
+# Segredos carregados uma vez no startup e reutilizados a cada request, para
+# nao pagar um round-trip ao SQLite em toda chamada autenticada.
+SESSION_SECRET = ""
+INTERNAL_SECRET = ""
 
-async def verify_token(request: Request):
+# Espelha config.password_is_default. Enquanto verdadeiro, a sessao autentica
+# mas so pode trocar a senha — ver `verify_token`. Mantido em memoria porque e
+# consultado em toda chamada protegida.
+PASSWORD_IS_DEFAULT = True
+
+
+def extract_token(request: Request, allow_query: bool = False) -> str:
+    """
+    Recupera o token do header Authorization.
+
+    `allow_query` libera o fallback pela query string e existe unicamente para
+    o MJPEG, consumido por uma tag <img> que nao envia headers. Token em query
+    string vaza para log de acesso e historico do navegador, entao o resto da
+    API nao aceita essa forma.
+    """
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    if auth_header and auth_header.startswith("Bearer "):
+        return auth_header[7:].strip()
+    if allow_query:
+        return request.query_params.get("token", "")
+    return ""
+
+
+async def verify_token(
+    request: Request, allow_query: bool = False, allow_default_password: bool = False
+):
+    token = extract_token(request, allow_query=allow_query)
+    if not token:
         raise HTTPException(status_code=401, detail="Token ausente ou inválido")
-    token = auth_header.split(" ")[1]
-    if token not in active_sessions and token != "mock_test_admin_token":
+    if not validate_token(SESSION_SECRET, token):
         raise HTTPException(status_code=401, detail="Sessão expirada ou inválida")
+
+    # Um appliance com a senha de fabrica e equivalente a um appliance sem
+    # senha: a credencial e publica. A sessao existe, mas nao abre nada alem da
+    # propria troca de senha — a checagem fica aqui, e nao so na UI, para que
+    # nenhum cliente consiga pular a etapa chamando a API direto.
+    if PASSWORD_IS_DEFAULT and not allow_default_password:
+        raise HTTPException(
+            status_code=403,
+            detail="Troca de senha obrigatória antes de usar o sistema",
+        )
+
     return token
 
-@app.on_event("startup")
+
+async def verify_internal(request: Request):
+    """
+    Protege os endpoints que so a engine local deve chamar. Sem isso, qualquer
+    um na rede consegue injetar frames arbitrarios no monitor do SOC.
+    """
+    provided = request.headers.get("X-Internal-Token", "")
+    if not provided or not hmac.compare_digest(provided, INTERNAL_SECRET):
+        raise HTTPException(status_code=401, detail="Chamada interna não autorizada")
+
+
 async def startup():
+    """Cria o schema e carrega os segredos. Chamada pelo lifespan da app."""
+    global SESSION_SECRET, INTERNAL_SECRET, PASSWORD_IS_DEFAULT
     await init_db()
+
+    db = await get_system_db()
+    SESSION_SECRET = await get_or_create_secret(db, SESSION_SECRET_KEY)
+    INTERNAL_SECRET = await get_or_create_secret(db, INTERNAL_SECRET_KEY)
+
+    async with db.execute(
+        "SELECT value FROM config WHERE key = 'password_is_default'"
+    ) as cursor:
+        row = await cursor.fetchone()
+    await db.close()
+
+    PASSWORD_IS_DEFAULT = bool(row) and row['value'] == 'true'
+
+    if PASSWORD_IS_DEFAULT:
+        print("  [AVISO] Senha de fábrica em uso. O sistema fica bloqueado até a troca.")
+
     print("  [OK] SOC API Gateway is ready.")
 
 @app.post("/api/auth/login")
 async def auth_login(payload: LoginPayload):
-    import hashlib
-    import uuid
-    input_hash = hashlib.sha256(payload.password.encode('utf-8')).hexdigest()
-    
     db = await get_system_db()
     async with db.execute("SELECT value FROM config WHERE key = 'admin_password_hash'") as cursor:
         row = await cursor.fetchone()
-    await db.close()
-    
-    db_hash = row['value'] if row else "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
-    
-    if input_hash == db_hash:
-        token = f"visioncam_tok_{uuid.uuid4().hex}"
-        active_sessions.add(token)
-        return {"status": "success", "token": token}
-    else:
+
+    stored = row['value'] if row else ""
+    if not stored or not verify_password(payload.password, stored):
+        await db.close()
         raise HTTPException(status_code=401, detail="Senha incorreta")
+
+    # Login valido com hash antigo: reescreve em PBKDF2 sem incomodar o usuario.
+    if is_legacy_hash(stored):
+        await db.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('admin_password_hash', ?)",
+            (hash_password(payload.password),),
+        )
+        await db.commit()
+        print("  [AUTH] Hash de senha migrado de SHA-256 para PBKDF2.")
+
+    await db.close()
+    # `must_change_password` diz a UI para levar direto a tela de troca. A
+    # recusa de verdade acontece no servidor, em verify_token.
+    return {
+        "status": "success",
+        "token": issue_token(SESSION_SECRET),
+        "must_change_password": PASSWORD_IS_DEFAULT,
+    }
 
 @app.get("/api/auth/verify")
 async def auth_verify(request: Request):
-    await verify_token(request)
-    return {"status": "valid"}
+    # Aceita a sessao mesmo com senha de fabrica para que a UI consiga
+    # distinguir "token invalido" de "precisa trocar a senha".
+    await verify_token(request, allow_default_password=True)
+    return {"status": "valid", "must_change_password": PASSWORD_IS_DEFAULT}
 
 @app.post("/api/auth/change-password")
 async def change_password(payload: ChangePasswordPayload, request: Request):
-    await verify_token(request)
-    import hashlib
-    old_hash = hashlib.sha256(payload.old_password.encode('utf-8')).hexdigest()
-    
+    global PASSWORD_IS_DEFAULT
+    # Unico endpoint acessivel enquanto a senha de fabrica estiver em uso.
+    await verify_token(request, allow_default_password=True)
+
+    if len(payload.new_password) < 8:
+        raise HTTPException(
+            status_code=400, detail="A nova senha deve ter ao menos 8 caracteres"
+        )
+
     db = await get_system_db()
     async with db.execute("SELECT value FROM config WHERE key = 'admin_password_hash'") as cursor:
         row = await cursor.fetchone()
-        
-    db_hash = row['value'] if row else "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918"
-    
-    if old_hash != db_hash:
+
+    stored = row['value'] if row else ""
+    if not stored or not verify_password(payload.old_password, stored):
         await db.close()
         raise HTTPException(status_code=400, detail="Senha antiga incorreta")
-        
-    new_hash = hashlib.sha256(payload.new_password.encode('utf-8')).hexdigest()
-    await db.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('admin_password_hash', ?)", (new_hash,))
+
+    await db.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('admin_password_hash', ?)",
+        (hash_password(payload.new_password),),
+    )
+    await db.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('password_is_default', 'false')"
+    )
     await db.commit()
     await db.close()
+
+    # Libera o restante da API na mesma requisicao, sem exigir novo login.
+    PASSWORD_IS_DEFAULT = False
     return {"status": "success"}
+
+# Chaves que a UI tem permissao para gravar. A tabela `config` tambem guarda os
+# segredos de sessao e o hash da senha; sem esta lista, um POST bastaria para
+# sobrescrever a chave que assina os tokens ou plantar um hash conhecido.
+CONFIG_WRITABLE_KEYS = {
+    "gemini_api_key",
+    "telegram_bot_token",
+    "telegram_chat_id",
+    "brain_rules",
+    "camera_name",
+    "route_left",
+    "route_right",
+    "model_source",
+    "enable_fallback",
+    "cloud_api_url",
+    "store_api_key",
+    "rtsp_url",
+    "retention_days",
+}
+
+
+@app.delete("/api/events/{event_id}")
+async def eliminar_evento(event_id: int, request: Request):
+    """
+    Elimina um evento e seu clipe.
+
+    Atende o direito de eliminação do titular (LGPD art. 18, VI) e serve para
+    descartar um falso positivo sem esperar o prazo de retenção.
+    """
+    await verify_token(request)
+    db = await get_queue_db()
+    try:
+        removido = await retention.expurgar_evento(db, event_id, EVENT_STORAGE)
+    finally:
+        await db.close()
+
+    if not removido:
+        raise HTTPException(status_code=404, detail="Evento não encontrado")
+    return {"status": "success", "eliminado": event_id}
+
 
 @app.post("/api/config")
 async def save_config(payload: ConfigPayload, request: Request):
     await verify_token(request)
+    if payload.key not in CONFIG_WRITABLE_KEYS:
+        raise HTTPException(
+            status_code=400, detail=f"Chave de configuração não permitida: {payload.key}"
+        )
     db = await get_system_db()
     await db.execute("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", (payload.key, payload.value))
     await db.commit()
@@ -240,54 +426,29 @@ async def get_engine_status():
 @app.get("/api/logs/{container_name}")
 async def get_container_logs(container_name: str, request: Request):
     await verify_token(request)
-    import socket
-    socket_path = "/var/run/docker.sock"
-    if not os.path.exists(socket_path):
-        return {"logs": "Docker socket not available on this host. Cannot read container logs."}
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        request_uri = f"/v1.41/containers/{container_name}/logs?stdout=true&stderr=true&tail=150"
-        req = (
-            f"GET {request_uri} HTTP/1.1\r\n"
-            "Host: localhost\r\n"
-            "Connection: close\r\n\r\n"
+
+    # O nome vinha da URL direto para a requisicao ao Docker. Um valor com
+    # barras codificadas (`..%2F`) escapava da rota /logs e alcancava outros
+    # endpoints da API. A lista fecha isso e, de quebra, evita expor os logs de
+    # containers de terceiros que por acaso rodem no mesmo host.
+    if container_name not in CONTAINERS_VISIVEIS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Container não reconhecido: {container_name}",
         )
-        client.sendall(req.encode('utf-8'))
-        response_bytes = b""
-        while True:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            response_bytes += chunk
-        client.close()
-        
-        parts = response_bytes.split(b"\r\n\r\n", 1)
-        if len(parts) < 2:
-            return {"logs": "Invalid response from Docker daemon."}
-        
-        body = parts[1]
-        cleaned_logs = []
-        i = 0
-        while i < len(body):
-            if i + 8 <= len(body) and body[i] in (0, 1, 2) and body[i+1] == 0 and body[i+2] == 0 and body[i+3] == 0:
-                size = int.from_bytes(body[i+4:i+8], byteorder='big')
-                frame = body[i+8:i+8+size]
-                cleaned_logs.append(frame.decode('utf-8', errors='ignore'))
-                i += 8 + size
-            else:
-                remaining = body[i:]
-                cleaned_logs.append(remaining.decode('utf-8', errors='ignore'))
-                break
-                
-        return {"logs": "".join(cleaned_logs)}
+
+    try:
+        return {"logs": docker_client.ler_logs(container_name)}
+    except docker_client.DockerIndisponivel as erro:
+        return {"logs": f"Docker inacessível a partir do container: {erro}"}
     except Exception as e:
         print(f"  [DOCKER ERROR] Failed to fetch logs for {container_name}: {e}")
-        return {"logs": f"Error fetching logs: {str(e)}"}
+        return {"logs": f"Erro ao buscar logs: {e}"}
 
 @app.post("/api/internal/frame")
 async def receive_frame(request: Request):
     global latest_frame_bytes, frame_count
+    await verify_internal(request)
     latest_frame_bytes = await request.body()
     frame_count += 1
     if frame_count % 30 == 0:
@@ -297,6 +458,7 @@ async def receive_frame(request: Request):
 @app.post("/api/internal/engine-ready")
 async def engine_ready_signal(request: Request):
     global engine_ready
+    await verify_internal(request)
     engine_ready = True
     print("  [ENGINE] ✓ Engine pronta para detecção!")
     return {"status": "ready"}
@@ -317,7 +479,10 @@ async def frame_generator():
         await asyncio.sleep(0.05)
 
 @app.get("/video_feed")
-async def video_feed():
+async def video_feed(request: Request):
+    # Unico endpoint que aceita ?token=, porque a tag <img> do dashboard nao
+    # consegue enviar o header Authorization.
+    await verify_token(request, allow_query=True)
     return StreamingResponse(frame_generator(), media_type='multipart/x-mixed-replace; boundary=frame')
 
 # --- CAMERA CONFIG ENDPOINTS ---
@@ -434,6 +599,19 @@ async def delete_zone(zone_id: int, request: Request):
     await db.close()
     return {"status": "success"}
 
+# A tabela `config` guarda material sensivel junto das preferencias. Estas
+# chaves nunca podem sair pela API: os segredos derrubariam a autenticacao
+# inteira se vazassem, e os tokens de terceiros dao acesso a servicos externos.
+CONFIG_SECRET_KEYS = {
+    SESSION_SECRET_KEY,
+    INTERNAL_SECRET_KEY,
+    "admin_password_hash",
+    "gemini_api_key",
+    "telegram_bot_token",
+    "store_api_key",
+}
+
+
 @app.get("/api/config")
 async def get_all_config(request: Request):
     await verify_token(request)
@@ -441,7 +619,17 @@ async def get_all_config(request: Request):
     async with db.execute("SELECT * FROM config") as cursor:
         rows = await cursor.fetchall()
     await db.close()
-    return {row['key']: row['value'] for row in rows}
+
+    # Segredos viram um booleano "esta configurado?", que e tudo que a UI
+    # precisa para renderizar o estado dos campos sem expor o valor.
+    result = {}
+    for row in rows:
+        key, value = row['key'], row['value']
+        if key in CONFIG_SECRET_KEYS:
+            result[f"{key}_is_set"] = bool(value)
+        else:
+            result[key] = value
+    return result
 
 @app.get("/api/events")
 async def list_events(request: Request, limit: int = 50):
@@ -480,8 +668,16 @@ async def telegram_webhook(payload: WebhookPayload):
     return {"status": "success"}
 
 @app.get("/media/{filename}")
-async def serve_video(filename: str):
-    file_path = os.path.join(EVENT_STORAGE, filename)
+async def serve_video(filename: str, request: Request):
+    # Clipes de evento sao material de investigacao: exigem sessao valida.
+    await verify_token(request)
+
+    # basename descarta qualquer tentativa de travessia de diretorio antes de
+    # tocarmos o disco; a checagem de prefixo cobre o resto.
+    safe_name = os.path.basename(filename)
+    file_path = os.path.abspath(os.path.join(EVENT_STORAGE, safe_name))
+    if not file_path.startswith(EVENT_STORAGE + os.sep):
+        raise HTTPException(status_code=400, detail="Caminho inválido")
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Video not found")
     return FileResponse(file_path, media_type="video/mp4")

@@ -1,0 +1,22 @@
+# Termina TLS para a UI do Portainer.
+#
+# O Caddy obtém e renova o certificado Let's Encrypt sozinho, desde que
+# PORTAINER_DOMAIN aponte para este host e as portas 80 e 443 estejam abertas.
+# O certificado válido é o que permite ao Edge Agent verificar o servidor em vez
+# de rodar com EDGE_INSECURE_POLL=1.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$PORTAINER_DOMAIN} {
+	reverse_proxy portainer:9000
+
+	# O Portainer já aplica seus próprios cabeçalhos de segurança; aqui só
+	# reforçamos o transporte, que é responsabilidade de quem termina o TLS.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}

@@ -1,80 +1,204 @@
-version: '3.8'
+# ==============================================================================
+# Stack do appliance VisionCam — Radxa Cubie A7A (ARM64)
+#
+# Premissas de campo que moldaram este arquivo:
+#   - Roda meses sem ninguém por perto, em eMMC/SD, que é pequena e desgasta.
+#   - A rede da loja não é confiável: caixa, wi-fi de visitante e o appliance
+#     compartilham o mesmo segmento.
+#   - Sem monitoramento externo: o que falhar precisa se recuperar sozinho.
+#
+# Subir:  docker compose up -d
+# Ver:    docker compose ps
+# ==============================================================================
+
+# `version:` foi removido de propósito — é obsoleto no Compose v2 e só gera
+# aviso a cada comando.
+
+# Ancora aplicada a todos os serviços. Sem limite de log, o driver json-file
+# cresce sem parar e enche o armazenamento do appliance em semanas — é a falha
+# de campo mais comum em Docker embarcado, e derruba tudo de uma vez.
+x-logging: &logging-padrao
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
-  portainer-agent:
-    image: portainer/agent:latest
-    container_name: visioncam-portainer-agent
+  # ── Proxy do socket Docker ────────────────────────────────────────
+  # A API precisa ler logs e reiniciar o Frigate. Montar o socket direto nela
+  # daria controle total do host: quem fala com o socket cria um container
+  # privilegiado com o disco do host montado. Este proxy encaminha apenas o
+  # que está liberado abaixo e recusa o resto.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: visioncam-docker-proxy
     restart: always
-    ports:
-      - "9001:9001"
+    logging: *logging-padrao
+    environment:
+      # Leitura de containers e a rota de restart. Tudo o mais fica negado por
+      # padrão — em especial POST /containers/create e /exec, que são os
+      # caminhos de escape para o host.
+      - CONTAINERS=1
+      - POST=1
+      - ALLOW_RESTARTS=1
+      - IMAGES=0
+      - NETWORKS=0
+      - VOLUMES=0
+      - EXEC=0
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - SECRETS=0
+      - SERVICES=0
+      - SWARM=0
+      - SYSTEM=0
+      - NODES=0
+      - PLUGINS=0
+      - INFO=0
+      - AUTH=0
+      - DISTRIBUTION=0
+      - SESSION=0
+      - TASKS=0
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/volumes:/var/lib/docker/volumes
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Sem `ports:` — alcançável apenas pela rede interna do compose.
+    networks:
+      - visioncam
+    mem_limit: 64m
 
+  # ── Broker MQTT ───────────────────────────────────────────────────
   mqtt:
     image: eclipse-mosquitto:2
     container_name: visioncam-mqtt
     restart: always
+    logging: *logging-padrao
     ports:
-      - "1883:1883"
+      # Preso ao loopback: o Mosquitto roda sem autenticação, e exposto em
+      # 0.0.0.0 qualquer um na rede da loja publicaria eventos de detecção
+      # forjados ou leria o tráfego das câmeras.
+      - "127.0.0.1:1883:1883"
     volumes:
       - mqtt_data:/mosquitto/data
       - mqtt_log:/mosquitto/log
+    networks:
+      - visioncam
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/#' -C 1 -W 3 -h localhost || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
+  # ── NVR ───────────────────────────────────────────────────────────
   frigate:
     image: ghcr.io/blakeblackshear/frigate:stable
     container_name: visioncam-frigate
     restart: always
-    privileged: true
-    shm_size: "128mb"
+    logging: *logging-padrao
+    # `privileged: true` foi removido: dava acesso a todos os devices e
+    # capacidades do host. Os devices de que o Frigate realmente precisa estão
+    # declarados explicitamente logo abaixo.
     devices:
-      - /dev/dri:/dev/dri
-      - /dev/galcore:/dev/galcore
+      - /dev/dri:/dev/dri          # decode de vídeo por hardware
+      - /dev/galcore:/dev/galcore  # NPU Vivante
+    # A memória compartilhada guarda os frames em trânsito. 128m só atende uma
+    # câmera 640x480; some ~50m por câmera adicional, senão o Frigate reinicia
+    # sozinho sob carga.
+    shm_size: "256mb"
+    environment:
+      - TZ=${TZ:-America/Sao_Paulo}
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ./frigate_config.yml:/config/config.yml
       - ./storage/clips:/media/frigate/clips
     ports:
-      - "5000:5000"
-      - "8554:8554"
+      - "5000:5000"   # UI/API do Frigate — consumida pelo dashboard no navegador
+      - "8554:8554"   # restream RTSP
     depends_on:
-      - mqtt
+      mqtt:
+        condition: service_healthy
+    networks:
+      - visioncam
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:5000/api/version || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
+  # ── Núcleo: API, engine de visão, agente cognitivo ────────────────
   visioncam-core:
-    image: raphael7araujo/visioncam-core:latest
+    image: raphael7araujo/visioncam-core:${VISIONCAM_TAG:-latest}
     container_name: visioncam-core
     restart: always
+    logging: *logging-padrao
     environment:
       - FRIGATE_URL=http://frigate:5000
       - MQTT_HOST=mqtt
-      - CLOUD_API_URL=https://api.visioncam.com.br/v1
+      - CLOUD_API_URL=${CLOUD_API_URL:-https://api.visioncam.com.br/v1}
+      - TZ=${TZ:-America/Sao_Paulo}
+      # Fala com o Docker pelo proxy restrito, não pelo socket do host.
+      - DOCKER_PROXY_HOST=docker-socket-proxy
+      - DOCKER_PROXY_PORT=2375
+      # Aponte para um .nbg para mover a inferência da CPU para a NPU.
+      # Ver npu_compilation/ e PROJECT_STATUS.md.
+      - POSE_MODEL_PATH=${POSE_MODEL_PATH:-yolo26n-pose.pt}
+      - OBJ_MODEL_PATH=${OBJ_MODEL_PATH:-yolo26s.pt}
     volumes:
       - db_data:/app/core/database/data
       - ./storage/events:/app/edge/storage/events
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./frigate_config.yml:/app/frigate_config.yml
+      # O socket do host deixou de ser montado aqui — ver docker-socket-proxy.
     ports:
+      - "8000:8000"   # API, consumida pelo navegador do técnico
       - "8090:8090"
-      - "8000:8000"
     depends_on:
-      - frigate
-      - mqtt
+      frigate:
+        condition: service_started
+      mqtt:
+        condition: service_healthy
+    networks:
+      - visioncam
+    # Teto acima do uso observado da inferência (~1,2 GB com os dois modelos
+    # carregados), com folga. Sem limite, um vazamento aqui leva o OOM killer a
+    # escolher uma vítima arbitrária — normalmente o Frigate.
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/engine/status',timeout=5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s   # carregar os modelos YOLO leva ~1 min na primeira vez
 
+  # ── Console técnico local ─────────────────────────────────────────
   visioncam-ui:
-    image: raphael7araujo/visioncam-ui:latest
+    image: raphael7araujo/visioncam-ui:${VISIONCAM_TAG:-latest}
     container_name: visioncam-ui-local
     restart: always
+    logging: *logging-padrao
     ports:
       - "3000:3000"
-    volumes:
-      - db_data:/app/core/database/data
     environment:
       - NEXT_PUBLIC_API_URL=http://visioncam-core:8000
       - NEXT_PUBLIC_LOCAL_ONLY=true
+      - TZ=${TZ:-America/Sao_Paulo}
     depends_on:
-      - visioncam-core
+      visioncam-core:
+        condition: service_started
+    networks:
+      - visioncam
+    mem_limit: 512m
+    # O volume db_data foi removido: a UI fala com o banco pela API, nunca
+    # abrindo o SQLite direto. Dois processos escrevendo no mesmo arquivo é
+    # justamente o que o modo WAL não protege entre containers distintos.
 
 volumes:
   db_data:
   mqtt_data:
   mqtt_log:
+
+networks:
+  visioncam:
+    driver: bridge

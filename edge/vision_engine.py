@@ -12,7 +12,9 @@ from typing import Optional
 from ultralytics import YOLO
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from core.database.db import get_system_db, get_queue_db
+from core.database.db import get_system_db, get_queue_db, SYSTEM_DB_PATH
+from core.security import get_internal_secret_sync
+from shared.metrics import record_inference
 from edge.local_agent import LocalAgent, VisionEvent, EventType
 
 # ═══════════════════════════════════════════════════════════════════
@@ -669,6 +671,19 @@ camera_drift_dx = 0
 camera_drift_dy = 0
 http_client = httpx.AsyncClient(base_url="http://127.0.0.1:8000", timeout=0.5)
 
+# Segredo compartilhado com a API para os endpoints /api/internal/*. Quem o
+# gera e a API, no startup — e a engine pode subir antes dela, entao a leitura
+# e preguicosa e se repete ate o valor aparecer no banco.
+_internal_secret = ""
+
+
+def internal_headers():
+    """Headers de autenticacao interna, recarregando o segredo se necessario."""
+    global _internal_secret
+    if not _internal_secret:
+        _internal_secret = get_internal_secret_sync(SYSTEM_DB_PATH)
+    return {"X-Internal-Token": _internal_secret} if _internal_secret else {}
+
 # Full-FPS recording buffer: camera thread writes here at full camera FPS
 # This ensures saved videos play at real-time speed
 cam_fps = 20.0
@@ -773,14 +788,20 @@ def save_video_worker(pid, score, evidence_list, first_seen_t):
 
 
 async def stream_task():
-    global latest_processed_frame, latest_raw_frame
+    global latest_processed_frame, latest_raw_frame, _internal_secret
     while True:
         frame = latest_processed_frame if latest_processed_frame is not None else latest_raw_frame
         if frame is not None:
             try:
                 _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 55])
-                await http_client.post("/api/internal/frame", content=buf.tobytes())
-            except:
+                resp = await http_client.post(
+                    "/api/internal/frame", content=buf.tobytes(), headers=internal_headers()
+                )
+                if resp.status_code == 401:
+                    # Segredo ausente ou trocado (ex.: banco recriado):
+                    # forca a releitura na proxima volta do laco.
+                    _internal_secret = ""
+            except Exception:
                 pass
         await asyncio.sleep(0.04)
 
@@ -831,8 +852,10 @@ class DetectionAgentThread(threading.Thread):
         # Signal ready to API
         async def signal_ready():
             try:
-                await http_client.post("/api/internal/engine-ready", content=b"ok")
-            except:
+                await http_client.post(
+                    "/api/internal/engine-ready", content=b"ok", headers=internal_headers()
+                )
+            except Exception:
                 pass
         asyncio.run_coroutine_threadsafe(signal_ready(), self.loop)
 
@@ -900,9 +923,11 @@ class DetectionAgentThread(threading.Thread):
                     cv2.putText(frame, f"DRIFT: dx={dx} dy={dy}", (10, 30), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
+                infer_t0 = time.perf_counter()
                 res_pose = model_pose.track(frame, imgsz=320, persist=True, verbose=False,
                                              conf=0.35, tracker="botsort.yaml")
                 res_obj  = model_obj(frame, imgsz=320, verbose=False, conf=0.20)
+                record_inference((time.perf_counter() - infer_t0) * 1000.0)
 
                 active_pids = []
                 person_heads = {}

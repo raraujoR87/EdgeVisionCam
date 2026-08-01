@@ -18,6 +18,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Baixa os pesos YOLO na hora do build. Sem esta etapa o ultralytics tenta
+# busca-los no GitHub na primeira inferencia — o que derruba a engine em
+# qualquer loja cujo appliance suba sem acesso a internet. Os nomes precisam
+# acompanhar POSE_MODEL_PATH/OBJ_MODEL_PATH em edge/vision_engine.py.
+ENV YOLO_CONFIG_DIR=/app/.ultralytics
+RUN python -c "\
+from ultralytics import YOLO; \
+YOLO('yolo26n-pose.pt'); \
+YOLO('yolo26s.pt'); \
+print('[BUILD] Pesos YOLO embutidos na imagem.')"
+
 # Copy the entire codebase
 COPY . .
 
