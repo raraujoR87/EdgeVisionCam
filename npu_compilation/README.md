@@ -130,6 +130,28 @@ Reserve ~35 GB no pico (zip + extraído + imagem carregada). Apague o zip e o
 Se o link estiver fora do ar, o roteiro oficial está em
 `docs.radxa.com/en/cubie/a7a/app-dev/npu-dev/cubie_acuity_env`.
 
+O `readme` que acompanha a imagem confirma o conteúdo e a forma de uso:
+
+| | v2.0.10.2 |
+|---|---|
+| ACUITY | 6.30.22 |
+| Vivante IDE | 5.11.0 |
+| `ACUITY_PATH` | `~/acuity-toolkit-whl-x.x.x/bin` |
+
+O `x.x.x` é do próprio fabricante — a versão está no nome do diretório e muda
+entre revisões. Por isso `compilar_nbg.sh` descobre os caminhos do ACUITY e do
+Vivante IDE dentro do container em vez de fixá-los.
+
+O readme também é explícito quanto ao uso: *"o container serve apenas como
+ambiente de desenvolvimento; o código fica num diretório da máquina Linux local
+e o container acessa por montagem de arquivos"* — que é exatamente o desenho do
+`compilar_nbg.sh` (`-v $RAIZ/npu_compilation/trabalho:/work`).
+
+**Documentação oficial da NPU:** baixe o `aw_npu_model_zoo` em
+[open.allwinnertech.com](https://open.allwinnertech.com/); os documentos estão
+em `aw_npu_model_zoo/docs`. É a fonte mais completa sobre operadores suportados
+— útil se o `pegasus import` recusar alguma camada do YOLO.
+
 Não há substituto aberto: o formato NBG é proprietário e o compilador também.
 
 ### Se o unzip reclamar
