@@ -17,6 +17,67 @@ appliance.
 A placa **não** compila. Além de o ACUITY ser x86-only, o container não caberia
 confortavelmente no armazenamento do appliance.
 
+## Compilando no Windows
+
+O PC Windows **serve** — ele é x86_64, e o container do ACUITY roda nele
+nativamente. O que não roda no Windows são os scripts em bash. A ponte é o
+**WSL2**, que o próprio Docker Desktop já usa como backend.
+
+```powershell
+# PowerShell como administrador
+wsl --install
+```
+
+Reinicie, e instale o [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+Em *Settings → Resources → WSL Integration*, ative a distro (Ubuntu).
+
+A partir daí, tudo acontece dentro do Ubuntu do WSL:
+
+```bash
+git clone https://github.com/raraujoR87/EdgeVisionCam.git
+cd EdgeVisionCam
+git checkout claude/ajustes-radxa
+bash npu_compilation/preparar_host.sh
+```
+
+O `docker` dentro do WSL fala com o Docker Desktop do Windows — não é preciso
+instalar Docker separado.
+
+### Dois detalhes que economizam tempo
+
+**Trabalhe no sistema de arquivos do Linux**, não em `/mnt/c/...`. O acesso do
+WSL ao disco do Windows passa por uma camada de tradução e fica ordens de
+grandeza mais lento — com ~11 GB de imagem e milhares de arquivos temporários
+do ACUITY, a diferença é de minutos para horas.
+
+**Memória.** Por padrão o WSL2 toma até metade da RAM do host. Se a máquina
+tiver 8 GB ou menos, vale limitar para o Windows não travar, criando
+`C:\Users\<você>\.wslconfig`:
+
+```ini
+[wsl2]
+memory=8GB
+swap=8GB
+```
+
+Depois `wsl --shutdown` e abra de novo.
+
+### E na Radxa, não dá?
+
+Tecnicamente dá — com `qemu-user-static` e `binfmt_misc` a placa executa
+containers x86. Mas não compensa:
+
+- emulação x86 sobre ARM roda 5 a 20× mais devagar, e a quantização já é a
+  etapa pesada;
+- o ACUITY é baseado em TensorFlow; nos 4 GB da placa, com a stack de produção
+  no ar (~2,2 GB livres), a chance de OOM no meio da quantização é alta;
+- ~15 GB de imagem ocupando o armazenamento do appliance.
+
+Seria trocar o caminho fácil pelo difícil. Se ainda assim for a única opção,
+o roteiro é `docker run --platform linux/amd64` depois de
+`docker run --privileged --rm tonistiigi/binfmt --install amd64` — mas conte
+com horas em vez de minutos, e com a possibilidade de não terminar.
+
 ## Passo 0 — preparar o host
 
 ```bash

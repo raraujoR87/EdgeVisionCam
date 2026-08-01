@@ -30,11 +30,29 @@ echo "=========================================================="
 titulo "Arquitetura"
 ARCH="$(uname -m)"
 echo "  uname -m : $ARCH"
+# O WSL2 e um host x86 normal para efeito do Docker: vale a pena dizer isso em
+# voz alta, porque "preciso de Linux" costuma ser lido como "preciso de outra
+# maquina" quando o PC Windows ja serve.
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    ok "Rodando sob WSL2 — o Docker Desktop expõe o daemon aqui normalmente."
+fi
 case "$ARCH" in
     x86_64|amd64) ok "Compatível — o ACUITY é x86-only." ;;
     aarch64|arm64)
-        erro "Host ARM. O container do ACUITY não roda aqui."
-        erro "A compilação precisa de um PC x86 (Linux, ou Windows com WSL2)."
+        erro "Host ARM. O container do ACUITY é x86-only e não roda aqui."
+        echo
+        echo "  Emular x86 com QEMU é possível, mas não compensa:"
+        echo "    - 5 a 20x mais lento, e a quantização já é pesada;"
+        echo "    - o ACUITY é baseado em TensorFlow e não cabe confortavelmente"
+        echo "      nos 4 GB da placa, ainda mais com a stack de produção no ar;"
+        echo "    - ~15 GB de imagem no armazenamento do appliance."
+        echo
+        echo "  Use um PC x86. Se ele for Windows, o caminho é o WSL2:"
+        echo "    wsl --install                    (PowerShell como administrador)"
+        echo "    instale o Docker Desktop e ative a integração com o WSL"
+        echo "    abra o Ubuntu e rode este script de dentro dele"
+        echo
+        echo "  Detalhes: npu_compilation/README.md, seção 'Compilando no Windows'."
         exit 1 ;;
     *) aviso "Arquitetura $ARCH — provavelmente incompatível." ;;
 esac
