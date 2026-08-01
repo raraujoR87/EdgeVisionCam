@@ -144,7 +144,7 @@ if command -v vpm_run >/dev/null 2>&1 && [ -f "$VPM_DIR/operator/$NPU_VERSION/ne
     cp "$VPM_DIR/operator/$NPU_VERSION/network_binary.nb" "$TESTE/"
     cp "$VPM_DIR/operator/input_0.dat" "$TESTE/"
     cp "$VPM_DIR/operator/sample.txt" "$TESTE/"
-    if (cd "$TESTE" && timeout 60 vpm_run sample.txt 2>&1 | tail -20 | sed 's/^/    /'); then
+    if (cd "$TESTE" && timeout 60 vpm_run -s sample.txt 2>&1 | tail -20 | sed 's/^/    /'); then
         ok "A NPU executou um grafo. O silício está operacional."
     else
         aviso "O NBG de referência não executou. Antes de compilar um modelo"
@@ -193,7 +193,7 @@ if [ "$RESULTADO" -eq 0 ]; then
     echo "    2. Copie o .nb para esta placa e valide isolado. O vpm_run"
     echo "       recebe um arquivo de configuração, não o .nb direto:"
     echo "         printf '[network]\\n./yolov8n-pose.nb\\n' > sample.txt"
-    echo "         vpm_run sample.txt"
+    echo "         vpm_run -s sample.txt"
     echo
     echo "    3. Só então aponte a engine:"
     echo "       POSE_MODEL_PATH=edge/yolov8n-pose.nb"
