@@ -34,6 +34,10 @@ from enum import Enum
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.database.db import get_queue_db
 from shared.metrics import get_avg_inference_ms
+# Fonte unica do node da NPU: o mesmo valor decide o device montado no
+# container (edge_hardware) e o estado reportado na telemetria. Divergir os
+# dois foi o que manteve o painel mentindo sobre a aceleracao.
+from edge_hardware import NPU_DEVICE
 
 EVENT_STORAGE = os.path.join(os.path.dirname(__file__), 'storage', 'events')
 os.makedirs(EVENT_STORAGE, exist_ok=True)
@@ -743,10 +747,16 @@ class LocalAgent:
             try:
                 cpu, ram = get_system_stats()
                 
-                # Check NPU status
-                npu_status = "ACTIVE_TIMVX"
+                # Estado da NPU.
+                #
+                # O node correto do A733 e /dev/vipcore (driver VIPLite). Este
+                # teste procurava /dev/galcore, que nao existe nesta familia de
+                # SoC: a telemetria reportava CPU_FALLBACK mesmo com a NPU
+                # ativa, entao ninguem tinha como perceber pelo painel se a
+                # aceleracao estava valendo.
+                npu_status = "ACTIVE_VIPLITE"
                 pose_model = os.getenv("POSE_MODEL_PATH", "")
-                if pose_model.endswith(".pt") or not os.path.exists("/dev/galcore"):
+                if pose_model.endswith(".pt") or not os.path.exists(NPU_DEVICE):
                     npu_status = "CPU_FALLBACK"
                 
                 # Latencia real medida pela engine de visao. Ficava fixa em 0.0,

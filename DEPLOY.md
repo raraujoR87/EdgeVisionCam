@@ -134,7 +134,7 @@ segredo atual; digitar substitui.
 ### 2.5 Aceleração NPU (opcional)
 
 Por padrão a inferência roda em CPU (~120–145 ms por ciclo), com throttle de
-5 FPS. Para usar a NPU Vivante:
+5 FPS. Para usar a NPU VeriSilicon VIP9000 (driver VIPLite):
 
 ```bash
 python3 npu_compilation/export_onnx.py            # modelo → ONNX
@@ -142,7 +142,26 @@ python3 npu_compilation/prepare_calibration.py    # calibração (usa a câmera 
 bash    npu_compilation/acuity_export_yolo.sh     # ONNX → NBG (Docker Acuity, x86)
 ```
 
-Copie o `.nbg` para `edge/` na placa e aponte a engine:
+Antes de qualquer coisa, confirme que a placa tem a pilha da NPU:
+
+```bash
+bash deploy/npu_diagnostico.sh
+```
+
+Ele verifica o node `/dev/vipcore`, o módulo `sunxi_npu`, as bibliotecas
+VIPLite e a versão do driver. **A versão importa**: um NBG gerado por um ACUITY
+de versão diferente da do driver é recusado no carregamento, e a mensagem do
+runtime não indica que a causa é essa.
+
+Copie o `.nbg` para `edge/` na placa e valide isoladamente antes de apontar a
+engine — `vpm_run` executa qualquer NBG e separa "modelo ruim" de "integração
+ruim":
+
+```bash
+vpm_run edge/yolov8n-pose.nbg
+```
+
+Só então:
 
 ```yaml
 # docker-compose.yml, serviço visioncam-core
@@ -150,7 +169,7 @@ environment:
   - POSE_MODEL_PATH=edge/yolov8n-pose.nbg
 ```
 
-A telemetria passa a reportar `ACTIVE_TIMVX` no lugar de `CPU_FALLBACK`.
+A telemetria passa a reportar `ACTIVE_VIPLITE` no lugar de `CPU_FALLBACK`.
 Rode o passo de calibração **com a câmera da loja conectada** — a quantização
 INT8 dimensiona as escalas a partir dessas imagens, e calibrar com cenas
 genéricas derruba a precisão no dispositivo sem aparecer em teste algum.
@@ -208,7 +227,7 @@ python3 reset_system.py                  # limpar eventos e zonas
 | `exec format error` | Imagem construída para a arquitetura errada — ver 2.1 |
 | Tudo responde 403 | Senha de fábrica ainda em uso — troque-a |
 | 500 no login da nuvem | `AUTH_SECRET` ausente ou curta demais |
-| `CPU_FALLBACK` na telemetria | SDK `timvx` ausente ou `.nbg` não encontrado |
+| `CPU_FALLBACK` na telemetria | Runtime VIPLite ausente, `/dev/vipcore` inacessível ou `.nbg` não encontrado — rode `bash deploy/npu_diagnostico.sh` |
 | Preview sem imagem | Frigate fora do ar; o MJPEG da engine é o fallback |
 | `inference_ms` em 0.0 | Nenhuma inferência rodou ainda — engine parada |
 | Loja *down* no Portainer | Porta 8000 fechada no firewall do servidor |

@@ -99,9 +99,9 @@ services:
     # `privileged: true` foi removido: dava acesso a todos os devices e
     # capacidades do host.
     #
-    # Os devices de aceleração (/dev/dri, /dev/galcore) NÃO são declarados aqui
+    # Os devices de aceleração (/dev/dri, /dev/vipcore) NÃO são declarados aqui
     # de propósito. `devices:` é obrigatório no Compose: numa placa cujo kernel
-    # não expõe o galcore, o Frigate simplesmente não sobe, e a mensagem de erro
+    # não expõe a NPU, o Frigate simplesmente não sobe, e a mensagem de erro
     # aponta o device — não o driver ausente, que é a causa real. Como a stack
     # funciona sem eles (mais lenta, na CPU), essa dependência fica no override
     # gerado por edge_hardware.py, que só declara o que a placa de fato tem.

@@ -284,18 +284,49 @@ class VivantePoseEngine:
         self.tracker = IoUTracker()
 
         if model_path.endswith('.nbg'):
-            try:
-                import timvx
-
-                print(f"[NPU VIVANTE] Inicializando TIM-VX com o modelo NBG: {model_path}")
-                self.graph = timvx.Graph()
-                self.graph.load_nbg(model_path)
-                self.is_npu = True
-                print("[NPU VIVANTE] ✓ Grafo NBG carregado e pronto para inferência.")
-            except ImportError:
-                print("[NPU WARNING] SDK 'timvx' não instalado. Rodando em modo CPU Fallback.")
-                self.fallback_to_pytorch()
+            self._carregar_npu(model_path)
         else:
+            self.fallback_to_pytorch()
+
+    def _carregar_npu(self, model_path):
+        """
+        Carrega o grafo NBG pelo runtime VIPLite.
+
+        Este caminho antes fazia `import timvx` e chamava `timvx.Graph()`. Essa
+        API nao existe: TIM-VX e uma biblioteca C++ da VeriSilicon, sem esse
+        binding em Python, e nao e a pilha do A733 de todo modo. O `except
+        ImportError` engolia a falha e caia para CPU em silencio, o que fez o
+        codigo parecer pronto para NPU por meses sem nunca ter executado nela.
+
+        A pilha correta do A733 e VIPLite: node /dev/vipcore, modulo de kernel
+        `sunxi_npu`, bibliotecas libVIPhal.so/libNBGlinker.so vindas do ai-sdk
+        da Radxa. O binding e montado por edge/viplite.py sobre os headers
+        instalados na placa.
+        """
+        from edge import viplite
+
+        disponivel, motivo = viplite.disponivel()
+        if not disponivel:
+            # Falha explicita, com a causa exata. Antes so se via "SDK nao
+            # instalado" — indistinguivel de driver ausente, modelo faltando ou
+            # biblioteca incompativel, que exigem acoes completamente diferentes.
+            print(f"[NPU] Aceleracao indisponivel: {motivo}")
+            print("[NPU] Diagnostico completo: bash deploy/npu_diagnostico.sh")
+            self.fallback_to_pytorch()
+            return
+
+        if not os.path.exists(model_path):
+            print(f"[NPU] Modelo {model_path} nao encontrado. Compile com npu_compilation/.")
+            self.fallback_to_pytorch()
+            return
+
+        try:
+            print(f"[NPU VIPLITE] Carregando grafo NBG: {model_path}")
+            self.graph = viplite.Grafo(model_path)
+            self.is_npu = True
+            print(f"[NPU VIPLITE] Grafo carregado. Driver {viplite.versao()}.")
+        except Exception as erro:
+            print(f"[NPU] Falha ao carregar o grafo: {erro}")
             self.fallback_to_pytorch()
 
     def fallback_to_pytorch(self):
