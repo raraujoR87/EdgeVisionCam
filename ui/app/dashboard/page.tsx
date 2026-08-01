@@ -1,5 +1,6 @@
 import React from 'react';
 import { query, isDatabaseNotConfigured } from '../api/db';
+import { classificarLoja, APARENCIA, lojasComProblema } from './fleet';
 import { Shield, Activity, Monitor, AlertOctagon, Terminal, ExternalLink, HelpCircle } from 'lucide-react';
 
 // Forçar Next.js a rodar de forma dinâmica (sem build cache estático)
@@ -13,6 +14,7 @@ interface StoreData {
   cpu_usage: number | null;
   ram_usage: number | null;
   npu_status: string | null;
+  inference_ms: number | null;
   last_seen: string | null;
   total_events: number;
   critical_events: number;
@@ -28,7 +30,7 @@ export default async function DashboardPage() {
   try {
     const res = await query(`
       SELECT s.id, s.name, s.location, s.portainer_endpoint,
-             h.cpu_usage, h.ram_usage, h.npu_status, h.last_seen,
+             h.cpu_usage, h.ram_usage, h.npu_status, h.inference_ms, h.last_seen,
              COALESCE((SELECT COUNT(*) FROM events e WHERE e.store_id = s.id), 0)::integer as total_events,
              COALESCE((SELECT COUNT(*) FROM events e WHERE e.store_id = s.id AND e.verdict IN ('FURTO_CONFIRMADO', 'SUSPEITO')), 0)::integer as critical_events
       FROM stores s
@@ -38,47 +40,8 @@ export default async function DashboardPage() {
     
     stores = res.rows as StoreData[];
     
-    // Se o banco estiver vazio ou offline, carrega mock data para demonstração premium
     if (stores.length === 0) {
       isOffline = true;
-      stores = [
-        {
-          id: 1,
-          name: 'Supermercado Extra - Loja Centro',
-          location: 'São Paulo - SP',
-          portainer_endpoint: 'https://portainer.visioncam.com.br/#/endpoints/1',
-          cpu_usage: 42.5,
-          ram_usage: 68.2,
-          npu_status: 'ACTIVE_TIMVX',
-          last_seen: new Date().toISOString(),
-          total_events: 142,
-          critical_events: 12
-        },
-        {
-          id: 2,
-          name: 'Supermercado Pão de Açúcar - Pinheiros',
-          location: 'São Paulo - SP',
-          portainer_endpoint: 'https://portainer.visioncam.com.br/#/endpoints/2',
-          cpu_usage: 12.0,
-          ram_usage: 35.4,
-          npu_status: 'CPU_FALLBACK',
-          last_seen: new Date(Date.now() - 5 * 60000).toISOString(),
-          total_events: 89,
-          critical_events: 3
-        },
-        {
-          id: 3,
-          name: 'Mini Mercado Express - Campinas',
-          location: 'Campinas - SP',
-          portainer_endpoint: null,
-          cpu_usage: null,
-          ram_usage: null,
-          npu_status: null,
-          last_seen: null, // Offline / nunca conectado
-          total_events: 0,
-          critical_events: 0
-        }
-      ];
     }
   } catch (err) {
     console.error('Falha ao consultar banco central', err);
@@ -88,11 +51,10 @@ export default async function DashboardPage() {
 
   // Métricas agregadas
   const totalStores = stores.length;
-  const onlineStores = stores.filter(s => {
-    if (!s.last_seen) return false;
-    const minutesSinceSeen = (Date.now() - new Date(s.last_seen).getTime()) / 60000;
-    return minutesSinceSeen < 10; // Considera online se visto nos últimos 10 minutos
-  }).length;
+  // "Online" agora exige estar detectando. Contar container de pé como online
+  // era o que fazia uma loja cega parecer saudável no painel.
+  const detectando = stores.filter(s => classificarLoja(s) === 'DETECTANDO').length;
+  const comProblema = lojasComProblema(stores);
   const totalEventsCount = stores.reduce((acc, s) => acc + s.total_events, 0);
   const totalCriticalAlerts = stores.reduce((acc, s) => acc + s.critical_events, 0);
 
@@ -131,11 +93,16 @@ export default async function DashboardPage() {
         <div className="bg-slate-900/60 border border-slate-800/80 p-6 rounded-2xl backdrop-blur-md">
           <div className="flex justify-between items-center mb-4">
             <Activity className="text-emerald-500" size={20} />
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Radxas Online</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Detectando</span>
           </div>
-          <div className="text-4xl font-extrabold text-emerald-500">
-            {onlineStores} <span className="text-lg text-slate-600 font-normal">/ {totalStores}</span>
+          <div className={`text-4xl font-extrabold ${comProblema.length ? 'text-amber-400' : 'text-emerald-500'}`}>
+            {detectando} <span className="text-lg text-slate-600 font-normal">/ {totalStores}</span>
           </div>
+          {comProblema.length > 0 && (
+            <div className="text-[10px] font-bold text-amber-400/80 uppercase tracking-wider mt-2">
+              {comProblema.length} loja(s) exigindo atenção
+            </div>
+          )}
         </div>
 
         <div className="bg-slate-900/60 border border-slate-800/80 p-6 rounded-2xl backdrop-blur-md">
@@ -177,7 +144,7 @@ export default async function DashboardPage() {
             </thead>
             <tbody className="divide-y divide-slate-800/40 text-sm">
               {stores.map(store => {
-                const isOnline = store.last_seen && ((Date.now() - new Date(store.last_seen).getTime()) / 60000 < 10);
+                const isOnline = classificarLoja(store) !== 'OFFLINE' && classificarLoja(store) !== 'NUNCA_CONECTOU';
                 
                 return (
                   <tr key={store.id} className="hover:bg-slate-800/20 transition-colors">
@@ -186,22 +153,21 @@ export default async function DashboardPage() {
                       <div className="text-xs text-slate-500">{store.location}</div>
                     </td>
                     <td className="p-6">
-                      {store.last_seen ? (
-                        <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`}></span>
-                          <span className={isOnline ? 'text-emerald-400 font-medium' : 'text-slate-500'}>
-                            {isOnline ? 'Online' : 'Desconectado'}
-                          </span>
-                          <span className="text-xs text-slate-600">
-                            (Visto {new Date(store.last_seen).toLocaleTimeString('pt-BR')})
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 text-slate-600">
-                          <span className="w-2 h-2 rounded-full bg-slate-800"></span>
-                          <span>Nunca conectado</span>
-                        </div>
-                      )}
+                      {(() => {
+                        const saude = classificarLoja(store);
+                        const vis = APARENCIA[saude];
+                        return (
+                          <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${vis.ponto}`}></span>
+                            <span className={vis.classe}>{vis.rotulo}</span>
+                            {store.last_seen && (
+                              <span className="text-xs text-slate-600">
+                                ({new Date(store.last_seen).toLocaleTimeString('pt-BR')})
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="p-6 font-mono text-xs">
                       {isOnline && store.cpu_usage !== null && store.ram_usage !== null ? (

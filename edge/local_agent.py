@@ -784,10 +784,15 @@ class LocalAgent:
                         "x-store-api-key": api_key,
                         "Content-Type": "application/json"
                     }
+                    # inference_ms distingue "container de pé" de "engine
+                    # detectando". Sem ele, uma loja cuja engine morreu continua
+                    # aparecendo online no painel — que é exatamente a falha que
+                    # ninguém percebe: a loja acha que está protegida e não está.
                     payload = {
                         "cpu_usage": cpu,
                         "ram_usage": ram,
-                        "npu_status": npu_status
+                        "npu_status": npu_status,
+                        "inference_ms": inference_ms,
                     }
                     
                     loop = asyncio.get_event_loop()
