@@ -185,14 +185,33 @@ incompatibilidade só no `pegasus import`.
 
 ## Passo 2 — calibração
 
+A quantização INT8 dimensiona as escalas de cada tensor a partir destas
+imagens. Se elas não se parecerem com o que a câmera vê — iluminação da loja,
+ângulo, distância das pessoas, cor das prateleiras — as escalas ficam
+calibradas para outra distribuição e a precisão cai **no dispositivo**. Não no
+teste: o teste roda o ONNX em float e continua verde.
+
+**A câmera e o banco vivem na placa, não no PC que compila.** Colete lá e traga
+as imagens:
+
 ```bash
-python3 npu_compilation/prepare_calibration.py
+# na Radxa
+bash npu_compilation/coletar_calibracao.sh
 ```
 
-**Rode com a câmera da loja conectada.** Isto não é formalidade: a quantização
-INT8 dimensiona as escalas a partir dessas imagens. Calibrar com cenas genéricas
-derruba a precisão no dispositivo — e não aparece em teste nenhum, porque o
-teste roda o ONNX em float. O script avisa quando cai para imagens do COCO.
+Roda dentro do container `visioncam-core`, que já tem OpenCV e enxerga o banco
+e os clipes. Tenta, nesta ordem: câmera ao vivo → clipes de evento gravados →
+COCO. Ao final diz de onde vieram as imagens — se aparecer COCO, nem a câmera
+nem os clipes foram alcançados, e vale investigar antes de compilar.
+
+```bash
+# no PC (WSL), dentro do clone
+scp -r radxa@IP:~/EdgeVisionCam/npu_compilation/calibration_images ./npu_compilation/
+python3 npu_compilation/prepare_calibration.py --dir npu_compilation/calibration_images
+```
+
+Se o appliance já roda há algum tempo, os clipes de evento são uma fonte
+excelente: são exatamente as cenas que o sistema precisa acertar.
 
 ## Passo 3 — compilar
 

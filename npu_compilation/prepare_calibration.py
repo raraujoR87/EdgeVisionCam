@@ -11,9 +11,19 @@ Por isso a ordem de preferencia e:
     2. Clipes de eventos ja gravados em edge/storage/events.
     3. Imagens genericas do COCO (ultimo recurso).
 
+As fontes 1 e 2 so existem NA PLACA — a camera e o system.db vivem la, nao no
+PC que compila. O caminho pratico e coletar na placa e trazer as imagens:
+
+    # na Radxa
+    bash npu_compilation/coletar_calibracao.sh
+    # no PC
+    scp -r radxa@IP:~/EdgeVisionCam/npu_compilation/calibration_images ./npu_compilation/
+    python3 npu_compilation/prepare_calibration.py --dir npu_compilation/calibration_images
+
 Uso:
     python3 npu_compilation/prepare_calibration.py                 # tenta 1, 2, 3
     python3 npu_compilation/prepare_calibration.py --fonte camera
+    python3 npu_compilation/prepare_calibration.py --dir <pasta>   # ja coletadas
     python3 npu_compilation/prepare_calibration.py --quantidade 100
 """
 
@@ -120,6 +130,32 @@ def extrair_de_clipes(quantidade):
     return salvos
 
 
+def usar_diretorio(caminho, quantidade):
+    """
+    Aproveita imagens ja coletadas — normalmente trazidas da placa.
+
+    Existe porque a camera e o banco do appliance nao sao alcancaveis do PC que
+    compila. Sem esta opcao, o unico caminho disponivel no PC seria o COCO, que
+    e justamente o que degrada a precisao no dispositivo.
+    """
+    if not os.path.isdir(caminho):
+        print(f"  [dir] {caminho} não é um diretório.")
+        return []
+
+    extensoes = ("*.jpg", "*.jpeg", "*.png")
+    encontradas = []
+    for extensao in extensoes:
+        encontradas.extend(glob.glob(os.path.join(caminho, extensao)))
+    encontradas.sort()
+
+    if not encontradas:
+        print(f"  [dir] Nenhuma imagem em {caminho}.")
+        return []
+
+    print(f"  [dir] {len(encontradas)} imagens em {caminho}.")
+    return [os.path.abspath(c) for c in encontradas[:quantidade]]
+
+
 def baixar_coco():
     """Ultimo recurso: imagens genericas, que nao representam a loja."""
     import urllib.request
@@ -146,6 +182,13 @@ def main():
         help="Origem das imagens. 'auto' tenta câmera, depois clipes, depois COCO.",
     )
     parser.add_argument(
+        "--dir",
+        help=(
+            "Diretório com imagens já coletadas (normalmente trazidas da placa "
+            "por coletar_calibracao.sh). Tem precedência sobre --fonte."
+        ),
+    )
+    parser.add_argument(
         "--quantidade",
         type=int,
         default=50,
@@ -157,7 +200,13 @@ def main():
     os.makedirs(DIR_IMAGENS, exist_ok=True)
 
     imagens, origem = [], None
-    if args.fonte in ("auto", "camera"):
+    if args.dir:
+        imagens = usar_diretorio(args.dir, args.quantidade)
+        origem = "diretorio" if imagens else None
+        if not imagens:
+            print("\n[ERRO] --dir informado mas sem imagens utilizáveis.")
+            return 1
+    if not imagens and args.fonte in ("auto", "camera"):
         imagens = capturar_da_camera(args.quantidade)
         origem = "camera" if imagens else None
     if not imagens and args.fonte in ("auto", "clipes"):
@@ -179,9 +228,18 @@ def main():
 
     if origem == "coco":
         print(
-            "\n[AVISO] Calibrando com imagens genéricas do COCO. A precisão no "
-            "dispositivo será melhor se você rodar este script com a câmera da "
-            "loja conectada, ou depois que houver clipes de evento gravados."
+            "\n[AVISO] Calibrando com imagens genéricas do COCO. Elas não se"
+            " parecem com a loja, e a quantização vai dimensionar as escalas"
+            " para a distribuição errada — a precisão cai no dispositivo, sem"
+            " aparecer em teste algum."
+        )
+        print(
+            "        Colete na placa e traga as imagens:\n"
+            "          bash npu_compilation/coletar_calibracao.sh   (na Radxa)\n"
+            "          scp -r radxa@IP:~/EdgeVisionCam/npu_compilation/"
+            "calibration_images ./npu_compilation/\n"
+            "          python3 npu_compilation/prepare_calibration.py"
+            " --dir npu_compilation/calibration_images"
         )
 
     print("\nPróximo passo: bash npu_compilation/compilar_nbg.sh")
