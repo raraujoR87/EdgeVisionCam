@@ -68,18 +68,21 @@ titulo "Aceleração de hardware"
 # só com o que a placa tem. A ausência não impede a instalação — degrada para
 # CPU. O que importa aqui é registrar isso, senão a lentidão é atribuída a
 # rede, câmera ou modelo.
-if [ -e /dev/galcore ]; then
-    ok "/dev/galcore presente — driver da NPU Vivante carregado."
+# O node da NPU do A733 é /dev/vipcore (driver VIPLite, módulo sunxi_npu), e
+# NÃO /dev/galcore. Procurar galcore reporta "NPU ausente" numa placa cuja NPU
+# funciona — use deploy/npu_diagnostico.sh para o levantamento detalhado.
+if [ -e /dev/vipcore ]; then
+    ok "/dev/vipcore presente — driver VIPLite da NPU carregado."
 else
-    aviso "/dev/galcore AUSENTE — a inferência roda na CPU."
+    aviso "/dev/vipcore AUSENTE — a inferência roda na CPU."
     # Distinguir "módulo não existe" de "módulo existe e não foi carregado" é o
     # que separa 'sem solução' de 'um modprobe resolve'.
-    if find "/lib/modules/$(uname -r)" -name '*galcore*' 2>/dev/null | grep -q .; then
-        aviso "  O módulo EXISTE mas não está carregado. Tente: sudo modprobe galcore"
+    if find "/lib/modules/$(uname -r)" -name '*sunxi_npu*' 2>/dev/null | grep -q .; then
+        aviso "  O módulo EXISTE mas não está carregado: sudo modprobe sunxi_npu"
     else
-        aviso "  Nenhum módulo galcore neste kernel — a NPU depende de imagem"
-        aviso "  de sistema do fabricante com o driver Vivante."
+        aviso "  Nenhum módulo sunxi_npu neste kernel."
     fi
+    aviso "  Detalhes: bash deploy/npu_diagnostico.sh"
 fi
 if [ -d /dev/dri ]; then
     ok "/dev/dri presente ($(ls /dev/dri 2>/dev/null | tr '\n' ' '))"

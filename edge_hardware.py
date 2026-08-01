@@ -3,12 +3,12 @@ Adaptação do stack ao hardware que realmente está na bancada.
 
 O docker-compose.yml versionado descreve o appliance de referência: Radxa com
 4 GB, driver da NPU Vivante carregado e GPU exposta em /dev/dri. Nada disso é
-garantido no campo — placas chegam com 2 GB, kernels sem galcore, imagens de
-sistema sem DRI.
+garantido no campo — placas chegam com 2 GB, kernels sem o módulo da NPU,
+imagens de sistema sem DRI.
 
 Duas dessas divergências derrubam a instalação de forma difícil de diagnosticar:
 
-  - `devices:` no Compose é obrigatório. Se /dev/galcore não existe, o Frigate
+  - `devices:` no Compose é obrigatório. Se o node da NPU não existe, o Frigate
     não sobe e o erro fala de "device not found", sem indicar que o problema é
     o driver do kernel. Um técnico na loja não tem como saber disso.
 
@@ -27,12 +27,21 @@ sendo a única fonte do stack; aqui só sai o delta do hardware.
 
 import os
 
-# Devices que o Frigate usa quando existem. A ausência degrada o desempenho
+# Devices de aceleração usados quando existem. A ausência degrada o desempenho
 # (decode e inferência caem na CPU), mas não impede o sistema de funcionar —
 # por isso são opcionais, e não pré-requisito.
+#
+# O node da NPU é /dev/vipcore, não /dev/galcore. O A733 traz uma VeriSilicon
+# VIP9000 acessada pelo driver VIPLite (módulo `sunxi_npu`), e não a pilha
+# clássica Vivante/galcore usada em outros SoCs. Procurar galcore devolve
+# "NPU ausente" numa placa cuja NPU está perfeitamente funcional — foi assim
+# que esta configuração passou semanas rodando em CPU sem ninguém notar.
+NPU_DEVICE = "/dev/vipcore"
+NPU_MODULO = "sunxi_npu"
+
 DEVICES_OPCIONAIS = [
     ("/dev/dri", "decode de vídeo por hardware"),
-    ("/dev/galcore", "NPU Vivante"),
+    (NPU_DEVICE, "NPU VeriSilicon VIP9000 (VIPLite)"),
 ]
 
 # Perfis de memória, do maior para o menor.

@@ -6,7 +6,7 @@ Este documento detalha o desenho da infraestrutura de contêineres para rodar a 
 
 ## 🕸️ 1. Diagrama de Fluxo e Infraestrutura de Contêineres
 
-O ecossistema local no Radxa será composto por 5 contêineres principais orquestrados via `docker-compose`, rodando sob um Linux embarcado (Debian/Ubuntu) com acesso direto aos drivers do NPU Rockchip (`/dev/galcore` ou similar).
+O ecossistema local no Radxa será composto por 5 contêineres principais orquestrados via `docker-compose`, rodando sob um Linux embarcado (Debian/Ubuntu) com acesso direto ao driver da NPU VeriSilicon VIPLite (`/dev/vipcore`).
 
 ```mermaid
 graph TD
@@ -90,7 +90,7 @@ services:
     shm_size: "128mb" # SHM calculado para 4 câmeras 640x480
     devices:
       - /dev/dri:/dev/dri # Aceleração gráfica para decodificação
-      - /dev/galcore:/dev/galcore # NPU Rockchip
+      - /dev/vipcore:/dev/vipcore # NPU VeriSilicon VIP9000 (VIPLite)
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - ./frigate_config.yml:/config/config.yml

@@ -43,7 +43,7 @@ def test_placa_sem_aceleracao_nao_declara_devices(tmp_path):
 def test_detecta_apenas_os_devices_existentes(tmp_path):
     """
     Uma placa com GPU mas sem driver da NPU é caso comum: a imagem de sistema
-    traz DRI, o galcore depende de um módulo fora da árvore.
+    traz DRI, o driver da NPU depende de um módulo fora da árvore.
     """
     (tmp_path / "dev").mkdir()
     (tmp_path / "dev" / "dri").mkdir()
@@ -116,12 +116,12 @@ def test_hardware_de_referencia_nao_gera_override():
 
 
 def test_override_e_yaml_valido_e_mapeia_os_devices():
-    devices = [("/dev/dri", "decode"), ("/dev/galcore", "NPU")]
+    devices = [("/dev/dri", "decode"), ("/dev/vipcore", "NPU")]
     limites = {"visioncam-core": "1g", "frigate": "640m", "visioncam-ui": "256m"}
 
     doc = yaml.safe_load(hw.montar_override(devices, limites))
 
-    assert doc["services"]["frigate"]["devices"] == ["/dev/dri:/dev/dri", "/dev/galcore:/dev/galcore"]
+    assert doc["services"]["frigate"]["devices"] == ["/dev/dri:/dev/dri", "/dev/vipcore:/dev/vipcore"]
     assert doc["services"]["frigate"]["mem_limit"] == "640m"
     assert doc["services"]["visioncam-core"]["mem_limit"] == "1g"
     assert doc["services"]["visioncam-ui"]["mem_limit"] == "256m"
@@ -204,7 +204,7 @@ def test_ordem_dos_overrides_igual_a_do_instalador():
 
 def test_compose_base_nao_exige_devices():
     """
-    Se os devices voltarem para o base, a placa sem galcore volta a falhar — e
+    Se os devices voltarem para o base, a placa sem a NPU volta a falhar — e
     o override deixa de ter propósito.
     """
     assert "devices" not in _compose_base()["services"]["frigate"]
@@ -214,7 +214,7 @@ def test_compose_base_nao_exige_devices():
 
 def test_aplicar_grava_override_em_placa_pequena(tmp_path):
     (tmp_path / "dev").mkdir()
-    (tmp_path / "dev" / "galcore").write_text("")
+    (tmp_path / "dev" / "vipcore").write_text("")
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal:        2000000 kB\n", encoding="utf-8")
     destino = tmp_path / hw.ARQUIVO_OVERRIDE
@@ -222,10 +222,10 @@ def test_aplicar_grava_override_em_placa_pequena(tmp_path):
     resumo = hw.aplicar(str(destino), str(tmp_path), str(meminfo))
 
     assert resumo["override_gerado"]
-    assert resumo["devices"] == ["/dev/galcore"]
+    assert resumo["devices"] == ["/dev/vipcore"]
     assert resumo["perfil"] == "reduzido"
     assert "decode de vídeo por hardware" in resumo["ausentes"]
-    assert "/dev/galcore:/dev/galcore" in destino.read_text(encoding="utf-8")
+    assert "/dev/vipcore:/dev/vipcore" in destino.read_text(encoding="utf-8")
 
 
 def test_aplicar_remove_override_obsoleto(tmp_path):
@@ -237,7 +237,7 @@ def test_aplicar_remove_override_obsoleto(tmp_path):
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal:        4000000 kB\n", encoding="utf-8")
     destino = tmp_path / hw.ARQUIVO_OVERRIDE
-    destino.write_text("services:\n  frigate:\n    devices:\n      - /dev/galcore:/dev/galcore\n")
+    destino.write_text("services:\n  frigate:\n    devices:\n      - /dev/vipcore:/dev/vipcore\n")
 
     resumo = hw.aplicar(str(destino), str(tmp_path), str(meminfo))
 
@@ -257,4 +257,4 @@ def test_descricao_avisa_que_a_npu_ficou_de_fora(tmp_path):
     texto = "\n".join(hw.descrever(resumo))
 
     assert "CPU" in texto
-    assert "NPU Vivante" in texto
+    assert "VIP9000" in texto
