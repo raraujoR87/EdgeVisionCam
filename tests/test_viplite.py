@@ -382,3 +382,45 @@ def test_vpm_run_recebe_arquivo_de_configuracao():
         for invocacao in re.findall(r"vpm_run[^\n\"']*", texto):
             if "sample.txt" in invocacao:
                 assert "-s" in invocacao, f"{arquivo}: falta -s em '{invocacao.strip()}'"
+
+
+def test_pid_do_instalador_acompanha_o_do_compilador():
+    """
+    O instalador compara o chip ID reportado pela NPU com o PID que o
+    compilador usa. Se os dois arquivos divergirem, o aviso dispara errado —
+    ou pior, deixa passar uma divergência real.
+    """
+    import re
+
+    raiz = os.path.join(os.path.dirname(__file__), "..")
+    with open(os.path.join(raiz, "deploy", "instalar_npu_sdk.sh"), encoding="utf-8") as f:
+        instalador = f.read()
+
+    pid_instalador = re.search(r'PID_COMPILACAO="\$\{PID_COMPILACAO:-([^}]+)\}"', instalador)
+    pid_compilador = re.search(r'^OPTIMIZE="\$\{OPTIMIZE:-([^}]+)\}"',
+                               _script_compilacao(), re.MULTILINE)
+
+    assert pid_instalador and pid_compilador
+    assert pid_instalador.group(1) == pid_compilador.group(1)
+
+
+def test_constantes_batem_com_o_que_o_hardware_reportou():
+    """
+    O teste de fumaça na placa reportou, para o NBG de referência:
+        data_format=2, quant_format=2, scale=0.003922, zero_point=0
+
+    Isso confirma no silício os valores transcritos de vip_lite.h. Se alguém
+    renumerar as constantes, este teste cai antes de um grafo silenciosamente
+    inválido chegar a campo.
+    """
+    import numpy as np
+
+    assert viplite.FORMATOS[2] == "uint8"
+    assert viplite.QUANT_TF_ASYMM == 2
+
+    # scale=1/255 com zero_point=0: a faixa 0-255 do tensor representa 0.0-1.0,
+    # que é exatamente o que a engine alimenta.
+    tensor = viplite.Tensor(0, 2, [1, 3, 224, 224], viplite.QUANT_TF_ASYMM, 0.003922, 0, 0)
+    assert tensor.dtype == np.dtype("uint8")
+    assert tensor.quantizar(np.array([1.0], dtype=np.float32))[0] == 255
+    assert tensor.quantizar(np.array([0.0], dtype=np.float32))[0] == 0

@@ -112,6 +112,11 @@ VPM_DIR="$SDK_DIR/examples/vpm_run"
 # correta do silicio.
 NPU_VERSION="${NPU_VERSION:-v3}"
 
+# Precisa acompanhar o OPTIMIZE de npu_compilation/compilar_nbg.sh. O teste de
+# fumaca compara este valor com o chip ID que a NPU reporta, o que transforma
+# uma divergencia silenciosa (grafo compila, nao roda) em aviso imediato.
+PID_COMPILACAO="${PID_COMPILACAO:-VIP9000NANODI_PLUS_PID0X1000003B}"
+
 if ! command -v gcc >/dev/null 2>&1; then
     aviso "gcc ausente — pulando. Instale com: sudo apt-get install -y build-essential"
 elif [ ! -f "$VPM_DIR/vpm_run.c" ]; then
@@ -144,8 +149,33 @@ if command -v vpm_run >/dev/null 2>&1 && [ -f "$VPM_DIR/operator/$NPU_VERSION/ne
     cp "$VPM_DIR/operator/$NPU_VERSION/network_binary.nb" "$TESTE/"
     cp "$VPM_DIR/operator/input_0.dat" "$TESTE/"
     cp "$VPM_DIR/operator/sample.txt" "$TESTE/"
-    if (cd "$TESTE" && timeout 60 vpm_run -s sample.txt 2>&1 | tail -20 | sed 's/^/    /'); then
+    SAIDA_TESTE="$TESTE/saida.txt"
+    (cd "$TESTE" && timeout 60 vpm_run -s sample.txt > saida.txt 2>&1)
+    sed 's/^/    /' "$SAIDA_TESTE"
+
+    if grep -q "vpm run ret=0" "$SAIDA_TESTE"; then
         ok "A NPU executou um grafo. O silício está operacional."
+
+        # A versao do driver so aparece aqui — o vpm_run nao tem flag para ela.
+        grep -i "driver software version" "$SAIDA_TESTE" | sed 's/^/    /'
+
+        # O chip ID vem do proprio silicio. Comparar com o PID que o compilador
+        # usa evita descobrir a divergencia depois de meia hora de ACUITY: um
+        # PID de outra variante compila sem erro e produz um grafo que esta NPU
+        # recusa ou executa errado.
+        CID=$(grep -oE 'cid=0x[0-9a-fA-F]+' "$SAIDA_TESTE" | head -1 | cut -d= -f2)
+        if [ -n "$CID" ]; then
+            echo
+            echo "  Chip ID reportado pelo silício: $CID"
+            ESPERADO=$(echo "$PID_COMPILACAO" | grep -oiE 'PID0X[0-9a-f]+' | sed 's/^PID//' | tr 'A-Z' 'a-z')
+            if [ "$(echo "$CID" | tr 'A-Z' 'a-z')" = "$ESPERADO" ]; then
+                ok "Confere com $PID_COMPILACAO — é o --optimize correto."
+            else
+                aviso "DIVERGE do --optimize padrão ($PID_COMPILACAO)."
+                aviso "Antes de compilar, ajuste em npu_compilation/compilar_nbg.sh"
+                aviso "para o PID terminado em ${CID#0x} — senão o grafo não roda aqui."
+            fi
+        fi
     else
         aviso "O NBG de referência não executou. Antes de compilar um modelo"
         aviso "próprio, resolva isto — senão a falha terá duas causas possíveis."
