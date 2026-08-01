@@ -253,24 +253,18 @@ def test_caminho_npu_completo_com_grafo_simulado():
 
     sessao = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
 
-    class TensorFalso:
-        def copy_from(self, blob):
-            self.data = blob
-
-    class SaidaFalsa:
-        def __init__(self, arr):
-            self.arr = arr
-
-        def copy_to_numpy(self):
-            return self.arr
-
     class GrafoFalso:
-        def __init__(self):
-            self.inputs = [TensorFalso()]
-            self.outputs = []
+        """
+        Dublê de edge.viplite.Grafo rodando o ONNX real do mesmo modelo.
 
-        def run(self):
-            self.outputs = [SaidaFalsa(sessao.run(None, {"images": self.inputs[0].data})[0])]
+        Substitui apenas o silício: o letterbox, o decodificador e a volta ao
+        espaço do frame são o código de produção. É o que permite validar o
+        caminho de NPU inteiro sem a placa — o que falta cobrir é a quantização
+        INT8, que só o hardware exerce.
+        """
+
+        def inferir(self, blob):
+            return [sessao.run(None, {"images": blob})[0]]
 
     engine = VivantePoseEngine("simulado.nbg")
     engine.is_npu = True

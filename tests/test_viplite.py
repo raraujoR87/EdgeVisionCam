@@ -26,7 +26,9 @@ def test_device_e_vipcore_nao_galcore():
     numa placa cuja NPU funciona.
     """
     assert viplite.DEVICE == "/dev/vipcore"
-    assert viplite.MODULO_KERNEL == "sunxi_npu"
+    # O nome do módulo varia por BSP; ambos precisam ser aceitos.
+    assert "vipcore" in viplite.MODULOS_KERNEL
+    assert "sunxi_npu" in viplite.MODULOS_KERNEL
 
 
 def test_edge_hardware_usa_o_mesmo_device():
@@ -76,7 +78,7 @@ def test_ausencia_do_device_e_reportada_com_a_acao(monkeypatch):
 
     assert not disponivel
     assert "vipcore" in motivo
-    assert "sunxi_npu" in motivo
+    assert "sunxi_npu" in motivo  # ambos os nomes de módulo citados
 
 
 def test_modulo_presente_mas_descarregado_sugere_modprobe(monkeypatch):
@@ -89,7 +91,8 @@ def test_modulo_presente_mas_descarregado_sugere_modprobe(monkeypatch):
     disponivel, motivo = viplite.disponivel()
 
     assert not disponivel
-    assert "modprobe sunxi_npu" in motivo
+    assert "modprobe vipcore" in motivo
+    assert "sunxi_npu" in motivo  # o nome alternativo também é oferecido
 
 
 def test_biblioteca_faltando_e_nomeada(monkeypatch, tmp_path):
@@ -133,15 +136,17 @@ def test_grafo_falha_explicitamente_sem_npu(monkeypatch):
         viplite.Grafo("modelo.nbg")
 
 
-def test_grafo_nao_finge_estar_implementado(monkeypatch):
+def test_grafo_propaga_falha_da_biblioteca(monkeypatch):
     """
-    Enquanto o binding não existe, ele precisa dizer isso. Um stub que devolve
-    tensores vazios seria indistinguível de "nenhuma pessoa detectada" — num
-    sistema antifurto, o pior modo de falha possível.
+    Uma biblioteca presente mas não carregável (ABI errada, dependência
+    faltando) precisa falhar alto. Silenciar aqui devolveria um grafo inerte
+    que produz "nenhuma pessoa detectada" — o pior modo de falha num antifurto.
     """
     monkeypatch.setattr(viplite, "disponivel", lambda: (True, "ok"))
+    monkeypatch.setattr(viplite, "carregar_biblioteca",
+                        lambda: (_ for _ in ()).throw(viplite.NpuIndisponivel("ABI incompatível")))
 
-    with pytest.raises(viplite.NpuIndisponivel, match="nao implementado"):
+    with pytest.raises(viplite.NpuIndisponivel, match="ABI"):
         viplite.Grafo("modelo.nbg")
 
 
@@ -173,3 +178,106 @@ def test_caminho_do_ambiente_tem_precedencia(monkeypatch):
     monkeypatch.setenv("VIPLITE_LIB_DIR", "/caminho/customizado")
     caminhos = viplite._caminhos_de_biblioteca()
     assert caminhos[0] == "/caminho/customizado"
+
+
+# ── Estrutura em ctypes ────────────────────────────────────────────
+# Erro aqui não levanta exceção: produz tensores inválidos. Num antifurto isso
+# vira "nenhuma pessoa detectada", que é indistinguível de operação normal.
+
+def test_layout_de_buffer_create_params():
+    """
+    Espelha vip_buffer_create_params_t. Campo fora de ordem ou tipo errado faz
+    a NPU ler dimensões de onde está a escala de quantização.
+    """
+    import ctypes
+
+    campos = [nome for nome, _ in viplite.BufferCreateParams._fields_]
+    assert campos == [
+        "num_of_dims", "sizes", "data_format",
+        "quant_format", "quant_data", "memory_type",
+    ]
+
+    params = viplite.BufferCreateParams()
+    # sizes[6] no header — um array menor trunca tensores de 5 ou 6 dimensões.
+    assert ctypes.sizeof(params.sizes) == 6 * ctypes.sizeof(ctypes.c_uint32)
+    # vip_enum é vip_int32_t, não unsigned: um enum negativo viraria um valor
+    # enorme e a chamada seria recusada com "argumento inválido".
+    assert viplite.BufferCreateParams.data_format.size == 4
+
+
+def test_union_de_quantizacao_compartilha_memoria():
+    """
+    `quant_data` é union no header. Se virasse struct, o offset de memory_type
+    andaria e todo buffer seria criado com o tipo de memória errado.
+    """
+    import ctypes
+
+    assert ctypes.sizeof(viplite._QuantData) == max(
+        ctypes.sizeof(viplite._QuantDfp), ctypes.sizeof(viplite._QuantAffine)
+    )
+
+
+@pytest.mark.parametrize(
+    "codigo,dtype",
+    [(0, "float32"), (2, "uint8"), (3, "int8"), (5, "int16")],
+)
+def test_formatos_batem_com_vip_buffer_format_e(codigo, dtype):
+    """Valores transcritos de vip_lite.h. Trocá-los reinterpreta os bytes."""
+    import numpy as np
+
+    assert np.dtype(viplite.FORMATOS[codigo]).name == dtype
+
+
+# ── Quantização ────────────────────────────────────────────────────
+
+def test_quantizacao_assimetrica_ida_e_volta():
+    """
+    O ACUITY quantiza a entrada. Alimentar float cru num tensor uint8 produz
+    lixo sem erro nenhum — é o modo de falha mais caro deste caminho.
+    """
+    import numpy as np
+
+    tensor = viplite.Tensor(0, 2, [1, 3, 4, 4], viplite.QUANT_TF_ASYMM, 0.00392157, 0, 0)
+    original = np.array([0.0, 0.25, 0.5, 1.0], dtype=np.float32)
+
+    voltou = tensor.desquantizar(tensor.quantizar(original))
+
+    assert np.allclose(voltou, original, atol=0.01)
+    assert tensor.quantizar(original).dtype == np.uint8
+
+
+def test_quantizacao_satura_em_vez_de_dar_a_volta():
+    """
+    Sem clip, 300 vira 44 em uint8 por wraparound: um pixel saturado passaria a
+    valer quase nada, e o efeito na detecção seria sutil e intermitente.
+    """
+    import numpy as np
+
+    tensor = viplite.Tensor(0, 2, [4], viplite.QUANT_TF_ASYMM, 1.0, 0, 0)
+    resultado = tensor.quantizar(np.array([-50.0, 300.0], dtype=np.float32))
+
+    assert resultado[0] == 0
+    assert resultado[1] == 255
+
+
+def test_ponto_fixo_dinamico():
+    import numpy as np
+
+    tensor = viplite.Tensor(0, 5, [4], viplite.QUANT_DYNAMIC_FIXED_POINT, 1.0, 0, 8)
+    voltou = tensor.desquantizar(tensor.quantizar(np.array([1.0, -2.5], dtype=np.float32)))
+
+    assert np.allclose(voltou, [1.0, -2.5], atol=0.01)
+
+
+def test_sem_quantizacao_preserva_float():
+    import numpy as np
+
+    tensor = viplite.Tensor(0, 0, [2], viplite.QUANT_NONE, 1.0, 0, 0)
+    original = np.array([1.5, -0.25], dtype=np.float32)
+
+    assert np.allclose(tensor.quantizar(original), original)
+
+
+def test_contagem_de_elementos():
+    tensor = viplite.Tensor(0, 2, [1, 3, 320, 320], viplite.QUANT_NONE, 1.0, 0, 0)
+    assert tensor.elementos == 1 * 3 * 320 * 320

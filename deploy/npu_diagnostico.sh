@@ -51,24 +51,26 @@ fi
 
 # ── Módulo de kernel ──────────────────────────────────────────────
 titulo "Módulo de kernel"
-if grep -q '^sunxi_npu' /proc/modules 2>/dev/null; then
-    ok "sunxi_npu carregado"
-    grep '^sunxi_npu' /proc/modules | sed 's/^/    /'
+# O nome varia por BSP: `vipcore` na imagem da Radxa para o A733, `sunxi_npu`
+# em builds da Allwinner. Checar só um reporta "módulo ausente" numa placa cujo
+# driver está carregado — foi o que aconteceu na primeira versão deste script.
+if grep -qE '^(vipcore|sunxi_npu)' /proc/modules 2>/dev/null; then
+    ok "Módulo da NPU carregado:"
+    grep -E '^(vipcore|sunxi_npu)' /proc/modules | sed 's/^/    /'
 else
-    aviso "sunxi_npu não está carregado."
+    aviso "Nenhum módulo da NPU carregado."
     # Distinguir 'nao existe' de 'existe e nao carregou' e a diferenca entre
     # trocar a imagem do sistema e rodar um modprobe.
-    ENCONTRADO=$(find "/lib/modules/$(uname -r)" -name 'sunxi_npu*' 2>/dev/null | head -3)
+    ENCONTRADO=$(find "/lib/modules/$(uname -r)" \( -name 'vipcore*' -o -name 'sunxi_npu*' \) 2>/dev/null | head -3)
     if [ -n "$ENCONTRADO" ]; then
         ok "  Mas o módulo EXISTE:"
         echo "$ENCONTRADO" | sed 's/^/      /'
-        aviso "  Carregue com: sudo modprobe sunxi_npu"
+        aviso "  Carregue com: sudo modprobe vipcore  (ou sunxi_npu)"
     else
-        erro "  Nenhum módulo sunxi_npu neste kernel."
-        aviso "  A NPU depende da imagem de sistema da Radxa com o driver VIPLite."
+        aviso "  Nenhum módulo no disco — pode estar embutido no kernel (built-in),"
+        aviso "  o que é normal se /dev/vipcore existe."
     fi
 fi
-# Alguns BSPs nomeiam o modulo de outra forma; listar o que ha ajuda.
 echo "  Módulos com 'npu' ou 'vip' no nome:"
 grep -iE '^(.*npu|.*vip)' /proc/modules 2>/dev/null | sed 's/^/    /' || echo "    (nenhum)"
 

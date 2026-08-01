@@ -299,9 +299,8 @@ class VivantePoseEngine:
         codigo parecer pronto para NPU por meses sem nunca ter executado nela.
 
         A pilha correta do A733 e VIPLite: node /dev/vipcore, modulo de kernel
-        `sunxi_npu`, bibliotecas libVIPhal.so/libNBGlinker.so vindas do ai-sdk
-        da Radxa. O binding e montado por edge/viplite.py sobre os headers
-        instalados na placa.
+        `vipcore`, bibliotecas libVIPhal.so/libNBGlinker.so vindas do ai-sdk da
+        Radxa. O binding vive em edge/viplite.py, transcrito de vip_lite.h.
         """
         from edge import viplite
 
@@ -350,9 +349,10 @@ class VivantePoseEngine:
         # NCHW, RGB, normalizado — mesma convencao usada na calibracao INT8.
         blob = canvas[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255.0
 
-        self.graph.inputs[0].copy_from(blob)
-        self.graph.run()
-        raw_outputs = [t.copy_to_numpy() for t in self.graph.outputs]
+        # inferir() quantiza a entrada conforme o tensor do grafo e desquantiza
+        # as saidas de volta para float32 — o decodificador abaixo espera
+        # float, e alimentar o tensor INT8 com float cru produz lixo sem erro.
+        raw_outputs = self.graph.inferir(blob)
 
         boxes, scores, classes, kpts_xy, kpts_conf = decode_output(raw_outputs[0], conf)
 
