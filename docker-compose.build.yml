@@ -1,0 +1,40 @@
+# ==============================================================================
+# Override para construir as imagens na própria placa.
+#
+# O fluxo normal é a placa baixar imagens prontas do Docker Hub. Isso é o certo
+# para uma frota: uma build, muitos appliances. Mas em duas situações construir
+# localmente é melhor:
+#
+#   - Upgrade de um appliance que já está no ar. Subir o compose novo apontando
+#     para uma :latest publicada antes das mudanças troca código funcionando por
+#     código incompatível — o container novo espera o proxy do Docker, a imagem
+#     velha espera o socket montado, e nada disso aparece até o serviço quebrar.
+#     Construir do commit que está no disco elimina a divergência.
+#
+#   - Placa única, sem frota. O round-trip pelo registro não paga o próprio
+#     custo, e ainda exige credencial de push num equipamento que fica na loja.
+#
+# A placa é aarch64, então a build é nativa: sem QEMU, sem buildx, sem "exec
+# format error". Mais lenta que baixar, porém sem nenhuma peça móvel.
+#
+# Uso (junto com os demais overrides — a ordem importa):
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#
+# deploy/atualizar.sh faz isso e mais a verificação de saúde e o rollback.
+# ==============================================================================
+
+services:
+  visioncam-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # `image:` permanece o do compose base, então a imagem construída assume
+    # exatamente o nome que o `up` procura. Sem isto o Compose inventaria um
+    # nome derivado do projeto e o `up` continuaria usando a imagem antiga.
+    pull_policy: never
+
+  visioncam-ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    pull_policy: never
