@@ -8,6 +8,7 @@ import urllib.request
 import os
 import time
 
+import edge_hardware
 import edge_provisioning
 
 PORT = 8080
@@ -49,11 +50,15 @@ MGMT_OVERRIDE = "docker-compose.mgmt.yml"
 
 def compose_cmd(*args):
     """
-    Monta o comando do Compose incluindo o override de gerencia, quando existir.
+    Monta o comando do Compose incluindo os overrides existentes.
 
-    A ordem importa: o Compose sobrepoe os arquivos na sequencia informada.
+    A ordem importa: o Compose sobrepoe os arquivos na sequencia informada. O
+    override de hardware vem antes do de gerencia porque descreve a placa, e o
+    de gerencia apenas acrescenta um servico.
     """
     cmd = ["docker", "compose", "-f", "docker-compose.yml"]
+    if os.path.exists(edge_hardware.ARQUIVO_OVERRIDE):
+        cmd += ["-f", edge_hardware.ARQUIVO_OVERRIDE]
     if os.path.exists(MGMT_OVERRIDE):
         cmd += ["-f", MGMT_OVERRIDE]
     return cmd + list(args)
@@ -224,6 +229,21 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
         if os.path.exists(MGMT_OVERRIDE):
             os.remove(MGMT_OVERRIDE)
         add_log("Nenhum modo de gerência selecionado.")
+
+    # 2a. Adequar o stack ao hardware desta placa
+    #
+    # Roda antes do pull porque define se o Frigate vai conseguir subir. Não é
+    # motivo para abortar: sem NPU o sistema funciona na CPU, e é melhor
+    # instalar degradado e registrar isso no log do que recusar a instalação
+    # com o técnico na loja.
+    add_log("Inspecionando o hardware da placa...")
+    try:
+        resumo_hw = edge_hardware.aplicar()
+        for linha in edge_hardware.descrever(resumo_hw):
+            add_log(linha)
+    except Exception as e:
+        add_log(f"Aviso: não foi possível adequar o stack ao hardware ({e}).")
+        add_log("Seguindo com os limites padrão do docker-compose.yml.")
 
     # 2b. Escrever frigate_config.yml padrão se não existir
     if not os.path.exists("frigate_config.yml"):
