@@ -144,6 +144,64 @@ def test_servicos_do_override_existem_no_compose_base():
             assert servico in base["services"], f"{servico} não existe no compose base"
 
 
+def test_override_de_build_casa_com_o_compose_base():
+    """
+    Um serviço com nome divergente vira serviço novo em vez de sobrepor, e a
+    build local sairia sem efeito: o `up` seguiria usando a imagem baixada.
+    """
+    caminho = os.path.join(os.path.dirname(__file__), "..", "docker-compose.build.yml")
+    with open(caminho, encoding="utf-8") as arquivo:
+        build = yaml.safe_load(arquivo)
+
+    base = _compose_base()
+    raiz = os.path.join(os.path.dirname(__file__), "..")
+
+    for nome, servico in build["services"].items():
+        assert nome in base["services"], f"{nome} não existe no compose base"
+        # Sem `image:` no base, a build local não teria como assumir o nome que
+        # o `up` procura.
+        assert "image" in base["services"][nome], f"{nome} não define image no base"
+        # pull_policy: never impede que o `up` baixe do registro por cima da
+        # imagem recém-construída.
+        assert servico.get("pull_policy") == "never", f"{nome} pode ser sobrescrito por pull"
+
+        contexto = os.path.join(raiz, servico["build"]["context"])
+        dockerfile = os.path.join(contexto, servico["build"]["dockerfile"])
+        assert os.path.isfile(dockerfile), f"{nome}: {dockerfile} não existe"
+
+
+def test_scripts_de_deploy_sao_executaveis_e_validos():
+    """
+    Um script sem bit de execução ou com erro de sintaxe só falha na hora do
+    upgrade, com a loja parada.
+    """
+    import subprocess
+
+    deploy = os.path.join(os.path.dirname(__file__), "..", "deploy")
+    for nome in ("diagnostico.sh", "atualizar.sh", "reverter.sh", "preparar_appliance.sh"):
+        caminho = os.path.join(deploy, nome)
+        assert os.path.isfile(caminho), f"{nome} ausente"
+        assert subprocess.run(["bash", "-n", caminho]).returncode == 0, f"{nome} tem erro de sintaxe"
+
+
+def test_ordem_dos_overrides_igual_a_do_instalador():
+    """
+    O upgrade e a instalação limpa precisam produzir o mesmo stack. Se a ordem
+    dos -f divergir, o resultado difere e a diferença só aparece em campo.
+    """
+    raiz = os.path.join(os.path.dirname(__file__), "..")
+    with open(os.path.join(raiz, "deploy", "atualizar.sh"), encoding="utf-8") as arquivo:
+        script = arquivo.read()
+    with open(os.path.join(raiz, "bootstrap_installer.py"), encoding="utf-8") as arquivo:
+        instalador = arquivo.read()
+
+    for arquivo_compose in ("docker-compose.hardware.yml", "docker-compose.mgmt.yml"):
+        assert arquivo_compose in script, f"{arquivo_compose} não entra em atualizar.sh"
+
+    assert script.index("docker-compose.hardware.yml") < script.index("docker-compose.mgmt.yml")
+    assert instalador.index("edge_hardware.ARQUIVO_OVERRIDE") < instalador.index("MGMT_OVERRIDE)")
+
+
 def test_compose_base_nao_exige_devices():
     """
     Se os devices voltarem para o base, a placa sem galcore volta a falhar — e

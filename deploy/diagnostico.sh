@@ -64,11 +64,22 @@ else
 fi
 
 titulo "Aceleração de hardware"
+# O compose não declara mais estes devices: edge_hardware.py gera um override
+# só com o que a placa tem. A ausência não impede a instalação — degrada para
+# CPU. O que importa aqui é registrar isso, senão a lentidão é atribuída a
+# rede, câmera ou modelo.
 if [ -e /dev/galcore ]; then
     ok "/dev/galcore presente — driver da NPU Vivante carregado."
 else
-    aviso "/dev/galcore AUSENTE. O Frigate não sobe com esse device declarado."
-    aviso "Ou carregue o driver, ou remova a linha do docker-compose.yml."
+    aviso "/dev/galcore AUSENTE — a inferência roda na CPU."
+    # Distinguir "módulo não existe" de "módulo existe e não foi carregado" é o
+    # que separa 'sem solução' de 'um modprobe resolve'.
+    if find "/lib/modules/$(uname -r)" -name '*galcore*' 2>/dev/null | grep -q .; then
+        aviso "  O módulo EXISTE mas não está carregado. Tente: sudo modprobe galcore"
+    else
+        aviso "  Nenhum módulo galcore neste kernel — a NPU depende de imagem"
+        aviso "  de sistema do fabricante com o driver Vivante."
+    fi
 fi
 if [ -d /dev/dri ]; then
     ok "/dev/dri presente ($(ls /dev/dri 2>/dev/null | tr '\n' ' '))"
@@ -119,23 +130,41 @@ else
     aviso "avahi inativo. Sem ele o técnico precisa descobrir o IP no roteador."
 fi
 
-titulo "Portas em uso"
-# Conflito aqui aparece como container que sobe e morre, sem causa óbvia.
-for porta in 3000 5000 8000 8080 8554 1883; do
-    if ss -lntH "sport = :$porta" 2>/dev/null | grep -q .; then
-        aviso "Porta $porta já ocupada."
-    fi
-done
-ok "Verificação de portas concluída."
-
 titulo "Estado atual da stack"
+# Precisa vir ANTES da checagem de portas: com a stack no ar, as portas
+# aparecem ocupadas pelos próprios containers, o que não é conflito nenhum.
+JA_INSTALADO=0
 if command -v docker >/dev/null 2>&1 && docker ps >/dev/null 2>&1; then
     CONTAINERS=$(docker ps -a --filter "name=visioncam" --format '{{.Names}}\t{{.Status}}' 2>/dev/null)
     if [ -n "$CONTAINERS" ]; then
         echo "$CONTAINERS" | sed 's/^/  /'
+        JA_INSTALADO=1
+        echo
+        aviso "Já existe uma instalação no ar. Isto é um UPGRADE, não uma"
+        aviso "instalação limpa: subir o compose novo recria os containers e"
+        aviso "derruba o serviço até as imagens novas estarem no lugar."
+        aviso "Publique as imagens arm64 ANTES de rodar 'docker compose up -d'."
     else
         echo "  Nenhum container visioncam — instalação ainda não foi feita."
     fi
+fi
+
+titulo "Portas em uso"
+# Conflito aqui aparece como container que sobe e morre, sem causa óbvia — mas
+# só conta como conflito se quem ocupa a porta não for a própria stack.
+CONFLITOS=0
+for porta in 3000 5000 8000 8080 8554 1883; do
+    if ss -lntH "sport = :$porta" 2>/dev/null | grep -q .; then
+        if [ "$JA_INSTALADO" -eq 1 ]; then
+            echo "  Porta $porta ocupada pela stack atual (esperado)."
+        else
+            aviso "Porta $porta ocupada por outro serviço — vai impedir a subida."
+            CONFLITOS=$((CONFLITOS + 1))
+        fi
+    fi
+done
+if [ "$CONFLITOS" -eq 0 ]; then
+    ok "Nenhum conflito de porta."
 fi
 
 echo
