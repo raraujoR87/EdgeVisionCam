@@ -372,7 +372,13 @@ def test_vpm_run_recebe_arquivo_de_configuracao():
         if "vpm_run" not in texto:
             continue
         assert "[network]" in texto, f"{arquivo} não mostra o formato do sample.txt"
-        # A forma errada: vpm_run recebendo o .nb diretamente.
+
         import re
+        # A forma errada: vpm_run recebendo o .nb diretamente.
         assert not re.search(r"vpm_run\s+\S*\.nb\b", texto), \
             f"{arquivo} invoca vpm_run com o .nb direto"
+        # E a outra: sem o -s. O binário desta versão imprime a ajuda e sai,
+        # o que parece falha do grafo mas é só a invocação.
+        for invocacao in re.findall(r"vpm_run[^\n\"']*", texto):
+            if "sample.txt" in invocacao:
+                assert "-s" in invocacao, f"{arquivo}: falta -s em '{invocacao.strip()}'"

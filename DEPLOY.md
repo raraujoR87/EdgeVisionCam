@@ -164,7 +164,7 @@ derruba a precisão no dispositivo sem aparecer em teste algum.
 scp edge/yolov8n-pose.nb radxa@IP:~/EdgeVisionCam/edge/
 cd ~/EdgeVisionCam/edge
 printf '[network]\n./yolov8n-pose.nb\n' > sample.txt
-vpm_run sample.txt
+vpm_run -s sample.txt
 ```
 
 Só então:

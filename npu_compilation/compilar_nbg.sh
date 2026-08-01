@@ -270,7 +270,7 @@ echo "  2. Valide ISOLADO antes de apontar a engine. Isto separa"
 echo "     'modelo ruim' de 'integração ruim'. O vpm_run recebe um"
 echo "     arquivo de configuração, não o .nb direto:"
 echo "       printf '[network]\\n./${MODELO}.nb\\n' > sample.txt"
-echo "       vpm_run sample.txt"
+echo "       vpm_run -s sample.txt"
 echo
 echo "  3. Só então:"
 echo "       POSE_MODEL_PATH=edge/${MODELO}.nb"

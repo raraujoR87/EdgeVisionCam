@@ -186,17 +186,18 @@ def versao():
     driver e recusado no carregamento, e a mensagem do runtime nao deixa claro
     que a causa e incompatibilidade de versao.
     """
+    # O vpm_run nao tem flag de versao (so -h): passar --version faz ele imprimir
+    # a ajuda inteira. Por isso filtramos por linhas que realmente parecam uma
+    # versao, em vez de aceitar a primeira linha da saida — devolver texto de
+    # ajuda como "versao do driver" seria pior que admitir desconhecimento.
     try:
         saida = subprocess.run(
-            ["vpm_run", "--version"],
+            ["vpm_run", "-h"],
             capture_output=True, text=True, timeout=10,
         )
-        texto = (saida.stdout + saida.stderr).strip()
-        for linha in texto.splitlines():
-            if "version" in linha.lower():
+        for linha in (saida.stdout + saida.stderr).splitlines():
+            if "driver" in linha.lower() and "version" in linha.lower():
                 return linha.strip()
-        if texto:
-            return texto.splitlines()[0]
     except (OSError, subprocess.SubprocessError):
         pass
 

@@ -144,7 +144,7 @@ O `vpm_run` recebe um arquivo de configuração, **não** o `.nb` direto:
 ```bash
 cd ~/EdgeVisionCam/edge
 printf '[network]\n./yolov8n-pose.nb\n' > sample.txt
-vpm_run sample.txt
+vpm_run -s sample.txt
 ```
 
 Isto separa "modelo ruim" de "integração ruim". Pular esta etapa transforma
