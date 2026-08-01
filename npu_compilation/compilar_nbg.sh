@@ -157,7 +157,7 @@ docker run --rm \
     -v "$RAIZ/$TRABALHO:/work" \
     -w /work \
     -e ACUITY_RAIZ=/root \
-    -e VIV_SDK=/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools \
+    -e VIV_RAIZ=/root/Vivante_IDE \
     -e MODELO="$MODELO" \
     -e QUANT="$QUANT" \
     -e OPTIMIZE="$OPTIMIZE" \
@@ -172,6 +172,18 @@ if [ -z "$ACUITY_PATH" ]; then
     exit 1
 fi
 echo "ACUITY em: $ACUITY_PATH"
+
+# O readme da imagem documenta o caminho como acuity-toolkit-whl-x.x.x — o
+# proprio fabricante trata a versao como variavel. O Vivante IDE segue a mesma
+# convencao (VivanteIDE5.11.0 nesta revisao), entao tambem e descoberto.
+VIV_SDK="$(ls -d $VIV_RAIZ/VivanteIDE*/cmdtools 2>/dev/null | head -1)"
+if [ -z "$VIV_SDK" ]; then
+    echo "ERRO: Vivante IDE nao encontrado em $VIV_RAIZ/VivanteIDE*/cmdtools"
+    ls -d $VIV_RAIZ/* 2>/dev/null
+    exit 1
+fi
+export VIV_SDK
+echo "Vivante IDE em: $VIV_SDK"
 PEGASUS="$ACUITY_PATH/pegasus"
 [ -e "$PEGASUS" ] || PEGASUS="python3 $ACUITY_PATH/pegasus.py"
 
