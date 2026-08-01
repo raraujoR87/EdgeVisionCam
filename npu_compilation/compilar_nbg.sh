@@ -36,7 +36,9 @@ cd "$RAIZ" || exit 1
 
 MODELO="${MODELO:-yolov8n-pose}"
 INPUT_SIZE="${INPUT_SIZE:-320}"
-IMAGEM="${IMAGEM:-ubuntu-npu:v2.0.10.1}"
+# Vazio = descobre a imagem ubuntu-npu:* mais recente que estiver carregada.
+# A Netdisk publica revisoes sem aviso e fixar a versao recusa imagem valida.
+IMAGEM="${IMAGEM:-}"
 
 # `pcq` = perchannel_symmetric_affine + qtype int8: cada canal recebe sua propria
 # escala. Num detector isso pesa mais que no comum — as cabecas do YOLO (caixas,
@@ -73,13 +75,17 @@ if ! command -v docker >/dev/null 2>&1; then
     erro "Docker não instalado. Rode: bash npu_compilation/preparar_host.sh"
     exit 1
 fi
-if ! docker image inspect "$IMAGEM" >/dev/null 2>&1; then
-    erro "Imagem $IMAGEM ausente."
+if [ -z "$IMAGEM" ]; then
+    IMAGEM="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+              | grep '^ubuntu-npu:' | sort -V | tail -1)"
+fi
+if [ -z "$IMAGEM" ] || ! docker image inspect "$IMAGEM" >/dev/null 2>&1; then
+    erro "Nenhuma imagem ubuntu-npu:* carregada."
     echo "  Ela NÃO está no Docker Hub — vem da Allwinner (~11 GB)."
     echo "  Rode: bash npu_compilation/preparar_host.sh"
     exit 1
 fi
-ok "Docker e imagem $IMAGEM presentes"
+ok "Docker e imagem $IMAGEM"
 
 if [ ! -f "$ONNX" ]; then
     erro "$ONNX não encontrado."
@@ -150,12 +156,22 @@ echo
 docker run --rm \
     -v "$RAIZ/$TRABALHO:/work" \
     -w /work \
-    -e ACUITY_PATH=/root/acuity-toolkit-whl-6.30.22/bin \
+    -e ACUITY_RAIZ=/root \
     -e VIV_SDK=/root/Vivante_IDE/VivanteIDE5.11.0/cmdtools \
     -e MODELO="$MODELO" \
     -e QUANT="$QUANT" \
     -e OPTIMIZE="$OPTIMIZE" \
     "$IMAGEM" bash -euxo pipefail -c '
+# O diretorio carrega a versao do ACUITY no nome e muda entre revisoes da
+# imagem; fixa-lo faz a conversao falhar com "arquivo nao encontrado" numa
+# imagem valida.
+ACUITY_PATH="$(ls -d $ACUITY_RAIZ/acuity-toolkit*/bin 2>/dev/null | head -1)"
+if [ -z "$ACUITY_PATH" ]; then
+    echo "ERRO: ACUITY nao encontrado em $ACUITY_RAIZ/acuity-toolkit*/bin"
+    ls -d $ACUITY_RAIZ/* 2>/dev/null
+    exit 1
+fi
+echo "ACUITY em: $ACUITY_PATH"
 PEGASUS="$ACUITY_PATH/pegasus"
 [ -e "$PEGASUS" ] || PEGASUS="python3 $ACUITY_PATH/pegasus.py"
 

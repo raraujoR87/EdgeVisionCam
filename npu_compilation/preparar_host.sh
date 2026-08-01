@@ -13,7 +13,10 @@
 
 set -uo pipefail
 
-IMAGEM="${IMAGEM:-ubuntu-npu:v2.0.10.1}"
+# A Netdisk publica revisoes novas sem aviso (v2.0.10.1, v2.0.10.2, ...). Fixar
+# uma versao faz o script recusar uma imagem perfeitamente valida, entao aceita-se
+# qualquer ubuntu-npu:* e informa-se qual foi encontrada.
+IMAGEM="${IMAGEM:-}"
 URL_IMAGEM="https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/"
 INSTALAR_DOCKER="${INSTALAR_DOCKER:-0}"
 
@@ -63,11 +66,31 @@ titulo "Espaço em disco"
 # espaco no meio do `docker load` deixa a imagem pela metade, e o erro nao diz
 # que a causa foi disco.
 LIVRE_GB=$(df -BG --output=avail . 2>/dev/null | tail -1 | tr -dc '0-9')
-echo "  Livre: ${LIVRE_GB:-?} GB"
-if [ -n "${LIVRE_GB:-}" ] && [ "$LIVRE_GB" -lt 40 ]; then
-    aviso "Menos de 40 GB. O processo precisa de ~35 GB no pico:"
-    aviso "  zip 11 GB + extraído 11 GB + imagem carregada ~15 GB."
-    aviso "Você pode apagar o zip e o .tar depois do 'docker load'."
+echo "  Livre aqui : ${LIVRE_GB:-?} GB"
+
+# Sob WSL esse numero engana: o ext4.vhdx cresce sob demanda ate um teto de
+# ~1 TB, e o `df` mostra esse teto virtual. O limite real e o espaco livre no
+# disco do Windows. Quando ele acaba, o VHDX nao consegue crescer e o resultado
+# nao e "disco cheio": sao erros de I/O em arquivos do sistema e Bus error, que
+# parecem corrupcao do WSL.
+LIMITE=""
+if grep -qi microsoft /proc/version 2>/dev/null && [ -d /mnt/c ]; then
+    WIN_GB=$(df -BG --output=avail /mnt/c 2>/dev/null | tail -1 | tr -dc '0-9')
+    echo "  Livre em C:: ${WIN_GB:-?} GB   (o limite real — o VHDX cresce nele)"
+    LIMITE="${WIN_GB:-}"
+    [ -n "$LIMITE" ] && [ "$LIMITE" -lt "${LIVRE_GB:-0}" ] || LIMITE="${LIVRE_GB:-}"
+else
+    LIMITE="${LIVRE_GB:-}"
+fi
+
+if [ -n "${LIMITE:-}" ] && [ "$LIMITE" -lt 40 ]; then
+    aviso "Menos de 40 GB utilizáveis. O processo precisa de ~35 GB no pico:"
+    aviso "  zip 11 GB + tar extraído 11 GB + imagem carregada ~15 GB."
+    aviso "Apague o zip e o .tar logo após o 'docker load'."
+    if grep -qi microsoft /proc/version 2>/dev/null; then
+        aviso "No WSL, ficar sem espaço no Windows não dá 'disco cheio': dá"
+        aviso "erro de I/O e Bus error, que parecem corrupção da distro."
+    fi
 else
     ok "Espaço suficiente."
 fi
@@ -128,34 +151,39 @@ fi
 
 # ── Imagem do ACUITY ──────────────────────────────────────────────
 titulo "Imagem do ACUITY"
-if docker image inspect "$IMAGEM" >/dev/null 2>&1; then
+if [ -z "$IMAGEM" ]; then
+    IMAGEM="$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+              | grep '^ubuntu-npu:' | sort -V | tail -1)"
+fi
+
+if [ -n "$IMAGEM" ] && docker image inspect "$IMAGEM" >/dev/null 2>&1; then
     ok "$IMAGEM já carregada"
     echo "  Verificando o pegasus dentro dela..."
-    if docker run --rm "$IMAGEM" bash -c 'ls /root/acuity-toolkit-whl-*/bin/pegasus* 2>/dev/null' | head -3 | sed 's/^/    /'; then
+    if docker run --rm "$IMAGEM" bash -c 'ls /root/acuity-toolkit*/bin/pegasus* 2>/dev/null' | head -3 | sed 's/^/    /'; then
         ok "ACUITY presente."
     else
         aviso "pegasus não encontrado no caminho esperado — verifique a imagem."
     fi
 else
-    erro "$IMAGEM não está carregada."
+    erro "Nenhuma imagem ubuntu-npu:* carregada."
     echo
     echo "  Esta imagem NÃO está no Docker Hub. Vem da Netdisk da Allwinner:"
     echo
     echo "    $URL_IMAGEM"
     echo
-    echo "  'docker_images_v2.0.x' é uma PASTA. Entre nela e baixe o arquivo:"
-    echo "    docker_images_v2.0.x/ubuntu-npu_v2.0.10.1.tar.zip   (~11 GB)"
+    echo "  'docker_images_v2.0.x' é uma PASTA. Entre nela e baixe o arquivo"
+    echo "  ubuntu-npu_<versão>.tar.zip (~11 GB) — a revisão muda com o tempo."
     echo
     echo "  NÃO use 'baixar pasta': o Synology monta esse zip durante a"
     echo "  transferência e trunca com frequência nesse tamanho. O sintoma é"
     echo "  o unzip recusar com 'End-of-central-directory signature not found'."
     echo
     echo "  Depois de baixar:"
-    echo "    unzip ubuntu-npu_v2.0.10.1.tar.zip"
-    echo "    docker load -i ubuntu-npu_v2.0.10.1.tar"
+    echo "    unzip ubuntu-npu_*.tar.zip"
+    echo "    docker load -i ubuntu-npu_*.tar"
     echo
     echo "  Confira com:"
-    echo "    docker run --rm $IMAGEM bash -c 'ls /root/acuity-toolkit-whl-*/bin'"
+    echo "    docker images | grep ubuntu-npu"
     echo
     aviso "Sem esta imagem não há compilação — o ACUITY é proprietário e"
     aviso "não tem substituto aberto para o formato NBG."
@@ -200,12 +228,13 @@ fi
 # ── Resumo ────────────────────────────────────────────────────────
 echo
 echo "=========================================================="
-if docker image inspect "$IMAGEM" >/dev/null 2>&1; then
+if [ -n "$IMAGEM" ] && docker image inspect "$IMAGEM" >/dev/null 2>&1; then
     echo "  HOST PRONTO"
     echo "=========================================================="
     echo "  python3 npu_compilation/export_onnx.py"
     echo "  python3 npu_compilation/prepare_calibration.py"
-    echo "  bash    npu_compilation/compilar_nbg.sh"
+    echo "  IMAGEM=$IMAGEM \\"
+    echo "    bash npu_compilation/compilar_nbg.sh"
 else
     echo "  FALTA A IMAGEM DO ACUITY"
     echo "=========================================================="

@@ -97,10 +97,13 @@ dependências Python.
 https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/
 ```
 
-`docker_images_v2.0.x` é uma **pasta**, não um arquivo. Entre nela e baixe:
+`docker_images_v2.0.x` é uma **pasta**, não um arquivo. Entre nela e baixe o
+`ubuntu-npu_<versão>.tar.zip` — a revisão muda com o tempo (v2.0.10.1,
+v2.0.10.2, …), e os scripts aceitam qualquer `ubuntu-npu:*` que estiver
+carregada:
 
 ```
-docker_images_v2.0.x/ubuntu-npu_v2.0.10.1.tar.zip
+docker_images_v2.0.x/ubuntu-npu_v2.0.10.2.tar.zip
 ```
 
 **Não use "baixar pasta".** O Synology monta esse zip em tempo real durante a
@@ -109,13 +112,20 @@ aparentemente completo que o `unzip` recusa com *"End-of-central-directory
 signature not found"* — sem indicar que a causa foi o download.
 
 ```bash
-unzip ubuntu-npu_v2.0.10.1.tar.zip
-docker load -i ubuntu-npu_v2.0.10.1.tar
-docker run --rm ubuntu-npu:v2.0.10.1 bash -c 'ls /root/acuity-toolkit-whl-*/bin'
+unzip ubuntu-npu_*.tar.zip
+docker load -i ubuntu-npu_*.tar
+docker images | grep ubuntu-npu
 ```
 
-Reserve ~35 GB no pico (zip + extraído + imagem carregada). O zip e o `.tar`
-podem ser apagados depois do `docker load`.
+Reserve ~35 GB no pico (zip + extraído + imagem carregada). Apague o zip e o
+`.tar` **logo após** o `docker load`.
+
+> **No WSL isso é uma armadilha.** O `df` dentro da distro mostra o teto
+> virtual do `ext4.vhdx` (~1 TB), não o espaço real. O limite é o disco do
+> Windows, onde o VHDX cresce. Quando ele acaba, o sintoma **não** é "disco
+> cheio": são erros de I/O em binários do sistema (`/usr/bin/sed: Input/output
+> error`) e `Bus error`, que parecem corrupção da distro. Se isso acontecer:
+> libere espaço no Windows, rode `wsl --shutdown` no PowerShell e reabra.
 
 Se o link estiver fora do ar, o roteiro oficial está em
 `docs.radxa.com/en/cubie/a7a/app-dev/npu-dev/cubie_acuity_env`.
@@ -125,8 +135,8 @@ Não há substituto aberto: o formato NBG é proprietário e o compilador també
 ### Se o unzip reclamar
 
 ```bash
-ls -lh ubuntu-npu_v2.0.10.1.tar.zip   # esperado: ~11 GB
-file ubuntu-npu_v2.0.10.1.tar.zip     # esperado: "Zip archive data"
+ls -lh ubuntu-npu_*.tar.zip   # esperado: ~11 GB
+file  ubuntu-npu_*.tar.zip    # esperado: "Zip archive data"
 ```
 
 | O que aparece | O que aconteceu |
