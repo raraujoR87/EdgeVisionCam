@@ -5,7 +5,7 @@ O fluxo completo e:
 
     1. export_onnx.py          → <modelo>.onnx
     2. prepare_calibration.py  → calibrate_dataset.txt (quantizacao INT8)
-    3. acuity_export_yolo.sh   → <modelo>.nbg          (dentro do Docker Acuity)
+    3. compilar_nbg.sh         → <modelo>.nb           (dentro do Docker ACUITY)
 
 Uso:
     python3 npu_compilation/export_onnx.py                     # yolov8n-pose, 320
@@ -71,11 +71,48 @@ def main():
             print("     Layout: por âncoras (NMS na CPU). Caminho seguro para o Acuity.")
         else:
             print("     Layout não reconhecido pelo decodificador — verifique antes de compilar.")
+
+        gravar_inputs_outputs(sessao, args.imgsz)
     except ImportError:
         print("     (instale onnxruntime para inspecionar o layout de saída)")
+        print("     ATENÇÃO: inputs_outputs.txt NÃO foi gerado — compilar_nbg.sh vai falhar.")
 
     print("\nPróximo passo: python3 npu_compilation/prepare_calibration.py")
     return 0
+
+
+def gravar_inputs_outputs(sessao, imgsz):
+    """
+    Grava os nomes reais dos tensores para o `pegasus import`.
+
+    O ACUITY nao descobre entradas e saidas sozinho: precisa de --inputs,
+    --input-size-list e --outputs. Os nomes sao gerados pelo exportador do
+    ultralytics e mudam entre versoes e modelos — escreve-los a mao e a forma
+    mais rapida de perder uma hora com um erro que so diz "node not found".
+    """
+    entradas = sessao.get_inputs()
+    saidas = sessao.get_outputs()
+
+    nomes_saida = " ".join(saida.name for saida in saidas)
+    # A lista de tamanhos e por entrada, sem a dimensao de batch.
+    tamanhos = " ".join(f"'3,{imgsz},{imgsz}'" for _ in entradas)
+    nomes_entrada = " ".join(entrada.name for entrada in entradas)
+
+    linha = (
+        f"--inputs {nomes_entrada} "
+        f"--input-size-list {tamanhos} "
+        f"--outputs '{nomes_saida}'"
+    )
+
+    destino = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inputs_outputs.txt")
+    with open(destino, "w", encoding="utf-8") as arquivo:
+        arquivo.write(linha + "\n")
+
+    print(f"\n[OK] inputs_outputs.txt gerado:\n     {linha}")
+
+    if len(saidas) > 1:
+        print(f"     ATENÇÃO: {len(saidas)} saídas. O decodificador usa apenas a primeira")
+        print("     — confirme que é a que carrega as detecções.")
 
 
 if __name__ == "__main__":

@@ -146,7 +146,7 @@ if [ -n "$NBGS" ]; then
     done
 else
     aviso "Nenhum .nbg — o modelo ainda não foi compilado para a NPU."
-    aviso "Pipeline: npu_compilation/export_onnx.py → acuity_export_yolo.sh"
+    aviso "Pipeline: npu_compilation/README.md (compila no PC x86, não aqui)"
 fi
 echo "  POSE_MODEL_PATH atual: ${POSE_MODEL_PATH:-(não definido — CPU)}"
 

@@ -820,12 +820,12 @@ class DetectionAgentThread(threading.Thread):
 
     def run(self):
         t0 = time.time()
-        # Suporta carregamento dinâmico de modelos Vivante NPU (.nbg) no Radxa
+        # Suporta carregamento dinâmico de grafos da NPU (.nb/.nbg) no Radxa
         pose_model_path = os.getenv("POSE_MODEL_PATH", "yolo26n-pose.pt")
         obj_model_path = os.getenv("OBJ_MODEL_PATH", "yolo26s.pt")
 
         def load_model(path):
-            if path.endswith('.nbg'):
+            if path.endswith(('.nb', '.nbg')):
                 from edge.vivante_pose_engine import VivantePoseEngine
                 return VivantePoseEngine(path)
             else:

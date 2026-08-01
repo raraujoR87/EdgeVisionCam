@@ -132,17 +132,19 @@ if [ "$RESULTADO" -eq 0 ]; then
     echo "=========================================================="
     echo "  Falta o modelo. A NPU não executa .pt nem .onnx — só NBG:"
     echo
-    echo "    1. No PC (x86), com Docker:"
+    echo "    1. No PC x86 (não aqui — o ACUITY é x86-only):"
+    echo "       bash    npu_compilation/preparar_host.sh"
     echo "       python3 npu_compilation/export_onnx.py"
     echo "       python3 npu_compilation/prepare_calibration.py"
-    echo "       docker run -it --rm -v \"\$PWD:/work\" -w /work \\"
-    echo "         ubuntu-npu:v2.0.10.1 bash npu_compilation/acuity_export_yolo.sh"
+    echo "       bash    npu_compilation/compilar_nbg.sh"
     echo
-    echo "    2. Copie o .nbg para edge/ nesta placa e valide isolado:"
-    echo "       vpm_run edge/yolov8n-pose.nbg"
+    echo "    2. Copie o .nb para edge/ nesta placa e valide isolado:"
+    echo "       vpm_run edge/yolov8n-pose.nb"
     echo
     echo "    3. Só então aponte a engine:"
-    echo "       POSE_MODEL_PATH=edge/yolov8n-pose.nbg"
+    echo "       POSE_MODEL_PATH=edge/yolov8n-pose.nb"
+    echo
+    echo "  Detalhes: npu_compilation/README.md"
     echo "=========================================================="
 else
     erro "O runtime não ficou utilizável. Rode: bash deploy/npu_diagnostico.sh"
