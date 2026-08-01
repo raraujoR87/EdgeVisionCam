@@ -90,18 +90,26 @@ Produz `edge/yolov8n-pose.nb`.
 grafo para o driver unificado. Nossa placa roda VIPLite (`/dev/vipcore`). O
 arquivo errado carrega e falha depois, no meio da inferência.
 
-**`--optimize VIP9000NANOSI_PLUS_PID0X10000016`** — identifica a configuração
-exata do silício. Este é o **único parâmetro que ainda é inferência**: vem da
-configuração `v2` do `pegasus_setup.sh` do ai-sdk, a mesma do Allwinner T527,
-parente direto do A733, e corresponde ao `NPU_SW_VERSION=v2.0` do driver desta
-placa. Não foi validado no silício.
+**`--optimize VIP9000NANODI_PLUS_PID0X1000003B`** — identifica a configuração
+exata do silício. Vem de `machinfo/a733/config.mk` do ai-sdk:
 
-Se o NBG carregar e devolver detecções sem sentido, este é o primeiro suspeito.
-Alternativas:
+```
+NPU_VERSION    = v3       ← geração do silício, escolhe o PID
+NPU_SW_VERSION = v2.0     ← versão do driver, escolhe as bibliotecas
+```
+
+São coisas diferentes, e é fácil confundi-las — `v2.0` no nome do driver não
+significa geração `v2`. Pelo `pegasus_setup.sh`, `v3` mapeia para
+`VIP9000NANODI_PLUS_PID0X1000003B`. O A733 é da mesma família do **t536/t736**,
+não do t527 (que é `v2` / `NPU_SW_VERSION=v1.13`).
+
+Um PID de outra variante compila sem erro e produz um grafo que a NPU recusa ou
+executa errado. Se o NBG carregar e devolver detecções sem sentido, confira
+esta linha primeiro:
 
 ```bash
-OPTIMIZE=VIP9000NANODI_PLUS_PID0X1000003B bash npu_compilation/compilar_nbg.sh  # t536/mr536
-OPTIMIZE=VIP9000PICO_PID0XEE             bash npu_compilation/compilar_nbg.sh  # v85x/r853
+OPTIMIZE=VIP9000NANOSI_PLUS_PID0X10000016 bash npu_compilation/compilar_nbg.sh  # v2: t527/mr527/ai985
+OPTIMIZE=VIP9000PICO_PID0XEE              bash npu_compilation/compilar_nbg.sh  # v1: v85x/r853
 ```
 
 **`inputmeta.yml`** — descreve o pré-processamento da calibração: `mean=0`,
@@ -131,8 +139,12 @@ scp edge/yolov8n-pose.nb radxa@<ip>:~/EdgeVisionCam/edge/
 
 Na placa, **antes** de apontar a engine:
 
+O `vpm_run` recebe um arquivo de configuração, **não** o `.nb` direto:
+
 ```bash
-vpm_run edge/yolov8n-pose.nb
+cd ~/EdgeVisionCam/edge
+printf '[network]\n./yolov8n-pose.nb\n' > sample.txt
+vpm_run sample.txt
 ```
 
 Isto separa "modelo ruim" de "integração ruim". Pular esta etapa transforma
@@ -153,10 +165,11 @@ A telemetria deve passar de `CPU_FALLBACK` para `ACTIVE_VIPLITE`.
 Honestidade sobre o estado real, para que ninguém trate isto como caminho
 pavimentado:
 
-- **Nada disto rodou no silício.** O binding em `edge/viplite.py` foi transcrito
-  de `vip_lite.h` e a ordem das chamadas segue o `vpm_run.c` do ai-sdk, mas
-  nenhuma linha executou numa NPU.
-- **O `--optimize` é inferência** — ver acima.
+- **O binding em `edge/viplite.py` não executou numa NPU.** Foi transcrito de
+  `vip_lite.h` e a ordem das chamadas segue o `vpm_run.c` do ai-sdk, mas nenhuma
+  linha rodou no silício. O `deploy/instalar_npu_sdk.sh` executa um NBG de
+  referência do próprio SDK com o `vpm_run` — se aquele teste passar, driver,
+  runtime e silício estão provados, e resta só o nosso caminho.
 - **O efeito da quantização INT8 sobre a precisão não foi medido.** O
   decodificador foi validado contra o ONNX em float (IoU 0.99 na paridade com o
   ultralytics), o que cobre letterbox e decodificação, mas não o erro de

@@ -339,3 +339,40 @@ def test_extensao_do_grafo_aceita_a_que_o_acuity_gera():
 
     assert ".nb" in vpe.EXTENSOES_NBG
     assert ".nbg" in vpe.EXTENSOES_NBG
+
+
+def test_optimize_corresponde_a_geracao_do_silicio():
+    """
+    machinfo/a733/config.mk do ai-sdk: NPU_VERSION=v3, NPU_SW_VERSION=v2.0.
+
+    São eixos distintos — v2.0 é o driver, v3 é o silício — e é o silício que
+    escolhe o PID. Confundi-los levou este projeto ao PID do t527 (geração v2).
+    Um PID de outra variante compila sem erro e produz um grafo que a NPU
+    recusa ou executa errado.
+    """
+    script = _script_compilacao()
+    assert "VIP9000NANODI_PLUS_PID0X1000003B" in script
+
+    padrao = [l for l in script.splitlines() if l.startswith("OPTIMIZE=")]
+    assert len(padrao) == 1
+    assert "VIP9000NANODI_PLUS_PID0X1000003B" in padrao[0]
+
+
+def test_vpm_run_recebe_arquivo_de_configuracao():
+    """
+    O vpm_run não aceita o .nb direto: lê um sample.txt com as seções
+    [network]/[input]. Documentar errado faz o técnico concluir que o grafo
+    está quebrado quando o problema é a invocação.
+    """
+    raiz = os.path.join(os.path.dirname(__file__), "..")
+    for arquivo in ("npu_compilation/README.md", "DEPLOY.md",
+                    "npu_compilation/compilar_nbg.sh", "deploy/instalar_npu_sdk.sh"):
+        with open(os.path.join(raiz, arquivo), encoding="utf-8") as f:
+            texto = f.read()
+        if "vpm_run" not in texto:
+            continue
+        assert "[network]" in texto, f"{arquivo} não mostra o formato do sample.txt"
+        # A forma errada: vpm_run recebendo o .nb diretamente.
+        import re
+        assert not re.search(r"vpm_run\s+\S*\.nb\b", texto), \
+            f"{arquivo} invoca vpm_run com o .nb direto"
