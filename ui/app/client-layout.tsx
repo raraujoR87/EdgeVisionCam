@@ -1,7 +1,7 @@
 "use client"
 import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink } from 'lucide-react'
+import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { getApiUrl } from './utils/api'
 
@@ -132,6 +132,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               <Link href="/dashboard/events" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/events' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Shield size={20} />
                 <span className="font-medium">Auditoria Global</span>
+              </Link>
+              <Link href="/dashboard/deploys" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/deploys' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <Server size={20} />
+                <span className="font-medium">Deploys da Frota</span>
               </Link>
               <Link href="/" className="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-slate-800 hover:text-white rounded-xl transition-colors">
                 <ExternalLink size={20} />
