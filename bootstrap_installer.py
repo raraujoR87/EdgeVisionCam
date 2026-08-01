@@ -40,6 +40,23 @@ def check_docker():
     except Exception:
         return None
 
+# Override gerado pelo instalador com o servico de gerencia escolhido. O stack
+# base vive no docker-compose.yml versionado e nao e reescrito.
+MGMT_OVERRIDE = "docker-compose.mgmt.yml"
+
+
+def compose_cmd(*args):
+    """
+    Monta o comando do Compose incluindo o override de gerencia, quando existir.
+
+    A ordem importa: o Compose sobrepoe os arquivos na sequencia informada.
+    """
+    cmd = ["docker", "compose", "-f", "docker-compose.yml"]
+    if os.path.exists(MGMT_OVERRIDE):
+        cmd += ["-f", MGMT_OVERRIDE]
+    return cmd + list(args)
+
+
 def check_docker_compose():
     try:
         res = subprocess.run(["docker", "compose", "version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
@@ -84,21 +101,37 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
     else:
         add_log("Nenhuma credencial fornecida. Tentando baixar imagens públicas...")
 
-    # 2. Escrever docker-compose.yml
-    add_log("Gerando arquivo de configuração docker-compose.yml local...")
-    
-    # Determina o bloco do gerenciador (Portainer Agent ou Edge Agent ou nenhum)
+    # 2. Escrever o override de gerência (o stack base vem do repositório)
+    #
+    # Este instalador antes carregava uma cópia inteira do docker-compose.yml
+    # como f-string e sobrescrevia o arquivo do repositório. Eram duas
+    # definições divergentes do mesmo stack: correções de limite de memória,
+    # rotação de log ou healthcheck feitas no repositório nunca chegavam ao
+    # appliance, porque o instalador as apagava no deploy seguinte.
+    #
+    # Agora o docker-compose.yml versionado é a única fonte, e daqui sai apenas
+    # o serviço de gerência escolhido, num arquivo de override que o Compose
+    # sobrepõe ao base.
+    add_log("Preparando configuração de gerência de containers...")
+
     mgmt_service = ""
     if mgmt_mode == "portainer-agent":
         mgmt_service = """  portainer-agent:
     image: portainer/agent:latest
     container_name: visioncam-portainer-agent
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "9001:9001"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - visioncam
 """
     elif mgmt_mode == "portainer-edge-agent":
         if not edge_id:
@@ -117,6 +150,11 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
     image: portainer/edge-agent:latest
     container_name: visioncam-portainer-edge-agent
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - EDGE_KEY={edge_key}
       - EDGE_ID={edge_id}
@@ -124,89 +162,32 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - visioncam
 """
 
-    compose_content = f"""version: '3.8'
-
-services:
-{mgmt_service}
-  mqtt:
-    image: eclipse-mosquitto:2
-    container_name: visioncam-mqtt
-    restart: always
-    ports:
-      - "1883:1883"
-    volumes:
-      - mqtt_data:/mosquitto/data
-      - mqtt_log:/mosquitto/log
-
-  frigate:
-    image: ghcr.io/blakeblackshear/frigate:stable
-    container_name: visioncam-frigate
-    restart: always
-    privileged: true
-    shm_size: "128mb"
-    devices:
-      - /dev/dri:/dev/dri
-      - /dev/galcore:/dev/galcore
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - ./frigate_config.yml:/config/config.yml
-      - ./storage/clips:/media/frigate/clips
-    ports:
-      - "5000:5000"
-      - "8554:8554"
-    depends_on:
-      - mqtt
-
-  visioncam-core:
-    image: raphael7araujo/visioncam-core:latest
-    container_name: visioncam-core
-    restart: always
-    environment:
-      - FRIGATE_URL=http://frigate:5000
-      - MQTT_HOST=mqtt
-      - CLOUD_API_URL=https://api.visioncam.com.br/v1
-    volumes:
-      - db_data:/app/core/database/data
-      - ./storage/events:/app/edge/storage/events
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./frigate_config.yml:/app/frigate_config.yml
-    ports:
-      - "8090:8090"
-      - "8000:8000"
-    depends_on:
-      - frigate
-      - mqtt
-
-  visioncam-ui:
-    image: raphael7araujo/visioncam-ui:latest
-    container_name: visioncam-ui-local
-    restart: always
-    ports:
-      - "3000:3000"
-    volumes:
-      - db_data:/app/core/database/data
-    environment:
-      - NEXT_PUBLIC_API_URL=http://visioncam-core:8000
-      - NEXT_PUBLIC_LOCAL_ONLY=true
-    depends_on:
-      - visioncam-core
-
-volumes:
-  db_data:
-  mqtt_data:
-  mqtt_log:
-"""
-    try:
-        with open("docker-compose.yml", "w", encoding="utf-8") as f:
-            f.write(compose_content)
-        add_log("Arquivo docker-compose.yml gerado.")
-    except Exception as e:
-        add_log(f"Falha ao escrever docker-compose.yml: {e}")
+    if not os.path.exists("docker-compose.yml"):
+        add_log("ERRO: docker-compose.yml não encontrado. Rode o instalador a partir do clone do repositório.")
         deploy_state["is_deploying"] = False
-        deploy_state["error"] = f"Erro ao criar compose: {e}"
+        deploy_state["error"] = "docker-compose.yml ausente."
         return
+
+    if mgmt_service:
+        try:
+            with open(MGMT_OVERRIDE, "w", encoding="utf-8") as f:
+                f.write("services:\n" + mgmt_service)
+            add_log(f"Override de gerência gerado ({mgmt_mode}).")
+        except Exception as e:
+            add_log(f"Falha ao escrever {MGMT_OVERRIDE}: {e}")
+            deploy_state["is_deploying"] = False
+            deploy_state["error"] = f"Erro ao criar override: {e}"
+            return
+    else:
+        # Sem modo de gerência: remove um override de instalação anterior para
+        # que o agente não continue rodando por inércia.
+        if os.path.exists(MGMT_OVERRIDE):
+            os.remove(MGMT_OVERRIDE)
+        add_log("Nenhum modo de gerência selecionado.")
 
     # 2b. Escrever frigate_config.yml padrão se não existir
     if not os.path.exists("frigate_config.yml"):
@@ -245,7 +226,7 @@ cameras:
     add_log("Iniciando download das imagens do Docker Hub (docker compose pull)...")
     try:
         proc = subprocess.Popen(
-            ["docker", "compose", "pull"],
+            compose_cmd("pull"),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True
@@ -270,7 +251,7 @@ cameras:
     add_log("Subindo containers da stack (docker compose up -d)...")
     try:
         proc = subprocess.Popen(
-            ["docker", "compose", "up", "-d"],
+            compose_cmd("up", "-d"),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True

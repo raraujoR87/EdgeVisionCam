@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from core import docker_client
 from core.database.db import init_db, get_system_db, get_queue_db
 from core.security import (
     INTERNAL_SECRET_KEY,
@@ -116,28 +117,19 @@ def generate_frigate_config():
         import traceback; traceback.print_exc()
         return False
 
+# Containers do proprio appliance, os unicos cujos logs o console expoe.
+# Precisa acompanhar os container_name do docker-compose.yml e as opcoes do
+# seletor em ui/app/settings/page.tsx.
+CONTAINERS_VISIVEIS = {
+    "visioncam-core",
+    "visioncam-ui-local",
+    "visioncam-frigate",
+    "visioncam-mqtt",
+}
+
+
 def restart_frigate_container():
-    import socket
-    socket_path = "/var/run/docker.sock"
-    if not os.path.exists(socket_path):
-        print("  [DOCKER] Socket not found at /var/run/docker.sock, skipping container restart.")
-        return False
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        request = (
-            "POST /v1.41/containers/visioncam-frigate/restart HTTP/1.1\r\n"
-            "Host: localhost\r\n"
-            "Connection: close\r\n\r\n"
-        )
-        client.sendall(request.encode('utf-8'))
-        response = client.recv(4096).decode('utf-8', errors='ignore')
-        client.close()
-        print(f"  [DOCKER] Frigate container restart command sent: {response.splitlines()[0]}")
-        return True
-    except Exception as e:
-        print(f"  [DOCKER ERROR] Failed to restart visioncam-frigate container: {e}")
-        return False
+    return docker_client.reiniciar_container("visioncam-frigate")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -380,50 +372,24 @@ async def get_engine_status():
 @app.get("/api/logs/{container_name}")
 async def get_container_logs(container_name: str, request: Request):
     await verify_token(request)
-    import socket
-    socket_path = "/var/run/docker.sock"
-    if not os.path.exists(socket_path):
-        return {"logs": "Docker socket not available on this host. Cannot read container logs."}
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(socket_path)
-        request_uri = f"/v1.41/containers/{container_name}/logs?stdout=true&stderr=true&tail=150"
-        req = (
-            f"GET {request_uri} HTTP/1.1\r\n"
-            "Host: localhost\r\n"
-            "Connection: close\r\n\r\n"
+
+    # O nome vinha da URL direto para a requisicao ao Docker. Um valor com
+    # barras codificadas (`..%2F`) escapava da rota /logs e alcancava outros
+    # endpoints da API. A lista fecha isso e, de quebra, evita expor os logs de
+    # containers de terceiros que por acaso rodem no mesmo host.
+    if container_name not in CONTAINERS_VISIVEIS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Container não reconhecido: {container_name}",
         )
-        client.sendall(req.encode('utf-8'))
-        response_bytes = b""
-        while True:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            response_bytes += chunk
-        client.close()
-        
-        parts = response_bytes.split(b"\r\n\r\n", 1)
-        if len(parts) < 2:
-            return {"logs": "Invalid response from Docker daemon."}
-        
-        body = parts[1]
-        cleaned_logs = []
-        i = 0
-        while i < len(body):
-            if i + 8 <= len(body) and body[i] in (0, 1, 2) and body[i+1] == 0 and body[i+2] == 0 and body[i+3] == 0:
-                size = int.from_bytes(body[i+4:i+8], byteorder='big')
-                frame = body[i+8:i+8+size]
-                cleaned_logs.append(frame.decode('utf-8', errors='ignore'))
-                i += 8 + size
-            else:
-                remaining = body[i:]
-                cleaned_logs.append(remaining.decode('utf-8', errors='ignore'))
-                break
-                
-        return {"logs": "".join(cleaned_logs)}
+
+    try:
+        return {"logs": docker_client.ler_logs(container_name)}
+    except docker_client.DockerIndisponivel as erro:
+        return {"logs": f"Docker inacessível a partir do container: {erro}"}
     except Exception as e:
         print(f"  [DOCKER ERROR] Failed to fetch logs for {container_name}: {e}")
-        return {"logs": f"Error fetching logs: {str(e)}"}
+        return {"logs": f"Erro ao buscar logs: {e}"}
 
 @app.post("/api/internal/frame")
 async def receive_frame(request: Request):
