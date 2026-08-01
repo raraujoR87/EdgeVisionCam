@@ -91,7 +91,9 @@ grafo para o driver unificado. Nossa placa roda VIPLite (`/dev/vipcore`). O
 arquivo errado carrega e falha depois, no meio da inferência.
 
 **`--optimize VIP9000NANODI_PLUS_PID0X1000003B`** — identifica a configuração
-exata do silício. Vem de `machinfo/a733/config.mk` do ai-sdk:
+exata do silício. **Confirmado pelo hardware:** o `vpm_run` reporta
+`cid=0x1000003b` nesta placa, que é exatamente o PID acima. O valor foi deduzido
+de `machinfo/a733/config.mk` do ai-sdk e depois verificado no silício:
 
 ```
 NPU_VERSION    = v3       ← geração do silício, escolhe o PID
@@ -104,8 +106,9 @@ significa geração `v2`. Pelo `pegasus_setup.sh`, `v3` mapeia para
 não do t527 (que é `v2` / `NPU_SW_VERSION=v1.13`).
 
 Um PID de outra variante compila sem erro e produz um grafo que a NPU recusa ou
-executa errado. Se o NBG carregar e devolver detecções sem sentido, confira
-esta linha primeiro:
+executa errado. `deploy/instalar_npu_sdk.sh` compara o chip ID reportado com o
+PID configurado e avisa em caso de divergência — vale a pena rodá-lo numa placa
+nova antes de compilar. Se precisar de outra variante:
 
 ```bash
 OPTIMIZE=VIP9000NANOSI_PLUS_PID0X10000016 bash npu_compilation/compilar_nbg.sh  # v2: t527/mr527/ai985
@@ -167,9 +170,9 @@ pavimentado:
 
 - **O binding em `edge/viplite.py` não executou numa NPU.** Foi transcrito de
   `vip_lite.h` e a ordem das chamadas segue o `vpm_run.c` do ai-sdk, mas nenhuma
-  linha rodou no silício. O `deploy/instalar_npu_sdk.sh` executa um NBG de
-  referência do próprio SDK com o `vpm_run` — se aquele teste passar, driver,
-  runtime e silício estão provados, e resta só o nosso caminho.
+  linha do *nosso* código rodou no silício. O que já está provado, pelo teste de
+  fumaça do `deploy/instalar_npu_sdk.sh`: driver, runtime, ABI das bibliotecas e
+  o próprio silício.
 - **O efeito da quantização INT8 sobre a precisão não foi medido.** O
   decodificador foi validado contra o ONNX em float (IoU 0.99 na paridade com o
   ultralytics), o que cobre letterbox e decodificação, mas não o erro de
@@ -180,3 +183,35 @@ pavimentado:
   do `pegasus inference` com a do ONNX antes de confiar na precisão.
 
 Medir precisão exige clipes rotulados da loja — ver `evaluation/`.
+
+## Fatos confirmados no hardware
+
+Colhidos do teste de fumaça em 2026-08-01, numa Radxa Cubie A7A. Servem de
+referência para comparar quando algo divergir:
+
+```
+VIPLite driver software version 2.0.3.2-AW-2024-08-30
+cid=0x1000003b, device_count=1, core_count=1
+```
+
+Do NBG de referência (224x224x3, rede trivial):
+
+```
+create network    1902 us
+prepare network    934 us
+inferência        2808 us   (2.77 M ciclos)
+```
+
+Formato dos tensores, que valida as convenções assumidas em `edge/viplite.py`:
+
+| | valor | significado |
+|---|---|---|
+| `data_format=2` | `VIP_BUFFER_FORMAT_UINT8` | entrada e saída em uint8 |
+| `quant_format=2` | `VIP_BUFFER_QUANTIZE_TF_ASYMM` | escala + zero point |
+| entrada `scale=0.003922` | 1/255 | confirma `mean=0, scale=1/255` |
+| entrada `zero_point=0` | — | faixa 0–255 mapeia 0.0–1.0 |
+| saída `scale=0.001625, zero_point=128` | — | saída centrada, precisa desquantizar |
+
+O `scale=0.003922` na entrada é a confirmação mais útil: é exatamente o
+pré-processamento que `VivantePoseEngine._infer_npu` aplica (`canvas_rgb/255.0`)
+e o que `compilar_nbg.sh` grava em `channel_mean_value.txt`.
