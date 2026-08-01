@@ -130,7 +130,7 @@ services:
 
   # ── Núcleo: API, engine de visão, agente cognitivo ────────────────
   visioncam-core:
-    image: raphael7araujo/visioncam-core:latest
+    image: raphael7araujo/visioncam-core:${VISIONCAM_TAG:-latest}
     container_name: visioncam-core
     restart: always
     logging: *logging-padrao
@@ -174,7 +174,7 @@ services:
 
   # ── Console técnico local ─────────────────────────────────────────
   visioncam-ui:
-    image: raphael7araujo/visioncam-ui:latest
+    image: raphael7araujo/visioncam-ui:${VISIONCAM_TAG:-latest}
     container_name: visioncam-ui-local
     restart: always
     logging: *logging-padrao

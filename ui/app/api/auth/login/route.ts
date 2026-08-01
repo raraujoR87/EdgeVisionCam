@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query, isDatabaseNotConfigured } from '../../db';
-import crypto from 'crypto';
 import { signToken } from '../tokens';
+import { conferirSenha, ehHashLegado, gerarHash } from '../passwords';
 
 /**
  * Login do modo nuvem.
@@ -21,7 +21,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'E-mail e senha são obrigatórios' }, { status: 400 });
     }
 
-    const hash = crypto.createHash('sha256').update(password).digest('hex');
     const userRes = await query(
       'SELECT id, email, role, store_id, password_hash FROM users WHERE email = $1',
       [email]
@@ -34,13 +33,18 @@ export async function POST(request: Request) {
     }
 
     const user = userRes.rows[0];
-    const stored = Buffer.from(user.password_hash || '', 'utf-8');
-    const provided = Buffer.from(hash, 'utf-8');
-    const matches =
-      stored.length === provided.length && crypto.timingSafeEqual(stored, provided);
-
-    if (!matches) {
+    if (!conferirSenha(password, user.password_hash || '')) {
       return NextResponse.json({ error: 'Credenciais inválidas' }, { status: 401 });
+    }
+
+    // Login válido com hash antigo: reescreve em PBKDF2 sem incomodar o
+    // usuário. Mesma migração transparente que o appliance faz.
+    if (ehHashLegado(user.password_hash)) {
+      await query('UPDATE users SET password_hash = $1 WHERE id = $2', [
+        gerarHash(password),
+        user.id,
+      ]);
+      console.log(`[Auth] Hash de ${user.email} migrado para PBKDF2.`);
     }
 
     const token = signToken({

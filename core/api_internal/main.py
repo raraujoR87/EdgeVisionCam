@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
-from core import docker_client
+from core import docker_client, retention
 from core.database.db import init_db, get_system_db, get_queue_db
 from core.security import (
     INTERNAL_SECRET_KEY,
@@ -131,11 +131,44 @@ CONTAINERS_VISIVEIS = {
 def restart_frigate_container():
     return docker_client.reiniciar_container("visioncam-frigate")
 
+async def laco_de_retencao():
+    """
+    Expurga eventos vencidos uma vez por hora.
+
+    Roda dentro da API porque é o processo que já tem o banco aberto e vida
+    longa. De hora em hora é suficiente: o prazo é medido em dias, e uma
+    varredura mais frequente só gastaria I/O do cartão.
+    """
+    while True:
+        try:
+            db_sys = await get_system_db()
+            async with db_sys.execute(
+                "SELECT value FROM config WHERE key = 'retention_days'"
+            ) as cursor:
+                linha = await cursor.fetchone()
+            await db_sys.close()
+
+            dias = retention.normalizar_dias(linha["value"] if linha else None)
+
+            db_fila = await get_queue_db()
+            await retention.expurgar(db_fila, dias, EVENT_STORAGE)
+            await db_fila.close()
+        except Exception as erro:
+            # Falha no expurgo não pode derrubar a API — mas precisa aparecer.
+            print(f"  [RETENÇÃO ERRO] {erro}")
+
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # `on_event` esta depreciado no FastAPI e emitia aviso a cada boot.
     await startup()
-    yield
+    tarefa = asyncio.create_task(laco_de_retencao())
+    try:
+        yield
+    finally:
+        tarefa.cancel()
 
 
 app = FastAPI(title="VisionCam Edge-Safe API", lifespan=lifespan)
@@ -348,7 +381,28 @@ CONFIG_WRITABLE_KEYS = {
     "cloud_api_url",
     "store_api_key",
     "rtsp_url",
+    "retention_days",
 }
+
+
+@app.delete("/api/events/{event_id}")
+async def eliminar_evento(event_id: int, request: Request):
+    """
+    Elimina um evento e seu clipe.
+
+    Atende o direito de eliminação do titular (LGPD art. 18, VI) e serve para
+    descartar um falso positivo sem esperar o prazo de retenção.
+    """
+    await verify_token(request)
+    db = await get_queue_db()
+    try:
+        removido = await retention.expurgar_evento(db, event_id, EVENT_STORAGE)
+    finally:
+        await db.close()
+
+    if not removido:
+        raise HTTPException(status_code=404, detail="Evento não encontrado")
+    return {"status": "success", "eliminado": event_id}
 
 
 @app.post("/api/config")

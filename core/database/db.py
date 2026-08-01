@@ -64,6 +64,9 @@ async def init_db():
             # cobrar a troca antes de colocar o appliance em producao.
             "admin_password_hash": hash_password("admin"),
             "password_is_default": "true",
+            # Prazo de retencao dos clipes, em dias. A LGPD exige manter dado
+            # pessoal apenas pelo tempo do proposito; ver core/retention.py.
+            "retention_days": "30",
             "cloud_api_url": "https://api.visioncam.com.br/v1",
             # Vazio de proposito: e emitido por loja pelo provisionamento da
             # nuvem (ui/scripts/seed.mjs) e configurado em Settings. O valor
