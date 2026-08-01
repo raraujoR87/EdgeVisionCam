@@ -45,15 +45,19 @@ IMAGEM="${IMAGEM:-ubuntu-npu:v2.0.10.1}"
 # nao erro.
 QUANT="${QUANT:-pcq}"
 
-# VIP9000NANOSI_PLUS_PID0X10000016 e a configuracao `v2` do pegasus_setup.sh do
-# ai-sdk, a mesma usada pelo Allwinner T527 — parente direto do A733, e a que
-# corresponde ao NPU_SW_VERSION=v2.0 do driver desta placa.
+# Configuracao do silicio. Vem de machinfo/a733/config.mk do ai-sdk:
 #
-# NAO FOI VALIDADA NO SILICIO. E o unico parametro deste script que continua
-# sendo inferencia, e o mais provavel de precisar de ajuste. Se o NBG carregar
-# e devolver deteccoes sem sentido, este e o primeiro suspeito: as alternativas
-# estao em npu_compilation/README.md.
-OPTIMIZE="${OPTIMIZE:-VIP9000NANOSI_PLUS_PID0X10000016}"
+#     NPU_VERSION    = v3       <- geracao do silicio, escolhe o PID
+#     NPU_SW_VERSION = v2.0     <- versao do driver, escolhe as bibliotecas
+#
+# Sao coisas diferentes, e confundi-las leva ao PID errado: `v2.0` no nome do
+# driver nao significa geracao v2. Pelo pegasus_setup.sh, v3 mapeia para
+# VIP9000NANODI_PLUS_PID0X1000003B — a mesma familia do t536/t736, nao do t527.
+#
+# Um PID de outra variante compila sem erro e produz um grafo que a NPU recusa
+# ou executa errado, entao esta e a linha a conferir primeiro se o NBG carregar
+# e devolver deteccoes sem sentido. Alternativas em npu_compilation/README.md.
+OPTIMIZE="${OPTIMIZE:-VIP9000NANODI_PLUS_PID0X1000003B}"
 
 TRABALHO="npu_compilation/trabalho"
 ONNX="${MODELO}.onnx"
@@ -263,8 +267,10 @@ echo "  1. Copie o grafo:"
 echo "       scp edge/${MODELO}.nb radxa@<ip>:~/EdgeVisionCam/edge/"
 echo
 echo "  2. Valide ISOLADO antes de apontar a engine. Isto separa"
-echo "     'modelo ruim' de 'integração ruim':"
-echo "       vpm_run edge/${MODELO}.nb"
+echo "     'modelo ruim' de 'integração ruim'. O vpm_run recebe um"
+echo "     arquivo de configuração, não o .nb direto:"
+echo "       printf '[network]\\n./${MODELO}.nb\\n' > sample.txt"
+echo "       vpm_run sample.txt"
 echo
 echo "  3. Só então:"
 echo "       POSE_MODEL_PATH=edge/${MODELO}.nb"

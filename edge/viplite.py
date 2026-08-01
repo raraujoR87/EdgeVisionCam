@@ -35,7 +35,17 @@ import ctypes
 import os
 import subprocess
 
-import numpy as np
+# numpy NAO e importado no topo de proposito. A deteccao (`disponivel`,
+# `localizar_bibliotecas`, `carregar_biblioteca`) precisa rodar no python3 do
+# sistema, onde numpy nao esta instalado — ele vive dentro do container do
+# appliance. Importar no topo fazia o instalador do runtime quebrar com
+# ModuleNotFoundError num ponto em que a NPU estava perfeitamente configurada.
+# Quem executa grafo (Tensor, Grafo) importa sob demanda.
+
+
+def _np():
+    import numpy
+    return numpy
 
 # Node criado pelo driver VIPLite. Fonte unica compartilhada com edge_hardware.
 DEVICE = "/dev/vipcore"
@@ -226,9 +236,10 @@ QUANT_DYNAMIC_FIXED_POINT = 1
 QUANT_TF_ASYMM = 2
 
 # vip_buffer_format_e -> dtype numpy correspondente
+# Nomes, nao tipos numpy: assim a tabela existe sem numpy carregado.
 FORMATOS = {
-    0: np.float32, 1: np.float16, 2: np.uint8, 3: np.int8,
-    4: np.uint16, 5: np.int16, 8: np.int32, 9: np.uint32,
+    0: "float32", 1: "float16", 2: "uint8", 3: "int8",
+    4: "uint16", 5: "int16", 8: "int32", 9: "uint32",
 }
 
 MAX_DIMS = 6  # sizes[6] em vip_buffer_create_params_t
@@ -269,7 +280,7 @@ class Tensor:
         self.escala = escala
         self.zero_point = zero_point
         self.fixed_point = fixed_point
-        self.dtype = FORMATOS.get(formato, np.uint8)
+        self.dtype = _np().dtype(FORMATOS.get(formato, "uint8"))
         self.buffer = None
 
     @property
@@ -293,6 +304,7 @@ class Tensor:
         else:
             return dados.astype(self.dtype, copy=False)
 
+        np = _np()
         info = np.iinfo(self.dtype) if np.issubdtype(self.dtype, np.integer) else None
         if info is not None:
             valores = np.clip(np.round(valores), info.min, info.max)
@@ -300,6 +312,7 @@ class Tensor:
 
     def desquantizar(self, dados):
         """Formato do tensor -> float32, para o decodificador YOLO."""
+        np = _np()
         if self.quant_format == QUANT_TF_ASYMM and self.escala:
             return (dados.astype(np.float32) - self.zero_point) * self.escala
         if self.quant_format == QUANT_DYNAMIC_FIXED_POINT:
@@ -505,6 +518,7 @@ class Grafo:
     def escrever_entrada(self, dados, indice=0):
         """Copia `dados` (float32) para o buffer de entrada, quantizando."""
         tensor = self.inputs[indice]
+        np = _np()
         quantizado = tensor.quantizar(np.ascontiguousarray(dados, dtype=np.float32))
         if quantizado.size != tensor.elementos:
             raise NpuIndisponivel(
@@ -523,6 +537,7 @@ class Grafo:
         origem = self._lib.vip_map_buffer(tensor.buffer)
         if not origem:
             raise NpuIndisponivel(f"vip_map_buffer falhou na saida {indice}")
+        np = _np()
         bruto = np.ctypeslib.as_array(
             ctypes.cast(origem, ctypes.POINTER(ctypes.c_uint8)),
             shape=(tensor.elementos * np.dtype(tensor.dtype).itemsize,),

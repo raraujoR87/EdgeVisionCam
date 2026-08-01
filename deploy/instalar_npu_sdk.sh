@@ -101,6 +101,58 @@ else
     aviso "libVIPhal.so não aparece em 'ldconfig -p'. Verifique $DESTINO_LIB."
 fi
 
+# ── vpm_run ───────────────────────────────────────────────────────
+# O validador nao vem compilado. Vale montar aqui: e a unica forma de exercitar
+# a NPU sem envolver o nosso codigo, e o SDK ainda traz um NBG de teste da
+# geracao certa. Sem ele, a primeira falha teria duas causas possiveis (grafo
+# ruim ou integracao ruim) e nenhuma forma barata de distinguir.
+titulo "Compilando o vpm_run (validador de NBG)"
+VPM_DIR="$SDK_DIR/examples/vpm_run"
+# machinfo/a733/config.mk: NPU_VERSION=v3 seleciona o NBG de teste da geracao
+# correta do silicio.
+NPU_VERSION="${NPU_VERSION:-v3}"
+
+if ! command -v gcc >/dev/null 2>&1; then
+    aviso "gcc ausente — pulando. Instale com: sudo apt-get install -y build-essential"
+elif [ ! -f "$VPM_DIR/vpm_run.c" ]; then
+    aviso "Fonte do vpm_run não encontrada em $VPM_DIR"
+else
+    # Flags do próprio Makefile do exemplo, ramo NPU_SW_VERSION=v2.0.
+    if (cd "$VPM_DIR" && gcc -g -O2 -o vpm_run vpm_run.c \
+            -DNPU_SW_VERSION=2 -DSAVE_OUTPUT_TXT_FILE -DSHOW_TOP5 \
+            -I../libawnn_viplite -I../libawutils \
+            -I"$DESTINO_INC" \
+            -L"$DESTINO_LIB" -Wl,-rpath,"$DESTINO_LIB" \
+            -lNBGlinker -lVIPhal -lm 2>&1 | tail -15 | sed 's/^/    /'); then
+        if [ -x "$VPM_DIR/vpm_run" ]; then
+            $SUDO cp "$VPM_DIR/vpm_run" /usr/local/bin/
+            ok "vpm_run instalado em /usr/local/bin"
+        else
+            aviso "Compilação não produziu o binário."
+        fi
+    else
+        aviso "Falha ao compilar o vpm_run — não impede o resto."
+    fi
+fi
+
+# ── Teste de fumaça na NPU ────────────────────────────────────────
+# O SDK traz um NBG pronto para a geracao v3. Executa-lo prova driver, runtime
+# e silicio de uma vez, antes de existir qualquer modelo nosso.
+if command -v vpm_run >/dev/null 2>&1 && [ -f "$VPM_DIR/operator/$NPU_VERSION/network_binary.nb" ]; then
+    titulo "Teste de fumaça: executando um NBG de referência na NPU"
+    TESTE=$(mktemp -d)
+    cp "$VPM_DIR/operator/$NPU_VERSION/network_binary.nb" "$TESTE/"
+    cp "$VPM_DIR/operator/input_0.dat" "$TESTE/"
+    cp "$VPM_DIR/operator/sample.txt" "$TESTE/"
+    if (cd "$TESTE" && timeout 60 vpm_run sample.txt 2>&1 | tail -20 | sed 's/^/    /'); then
+        ok "A NPU executou um grafo. O silício está operacional."
+    else
+        aviso "O NBG de referência não executou. Antes de compilar um modelo"
+        aviso "próprio, resolva isto — senão a falha terá duas causas possíveis."
+    fi
+    rm -rf "$TESTE"
+fi
+
 # ── Verificação ───────────────────────────────────────────────────
 titulo "Verificando o carregamento"
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -138,8 +190,10 @@ if [ "$RESULTADO" -eq 0 ]; then
     echo "       python3 npu_compilation/prepare_calibration.py"
     echo "       bash    npu_compilation/compilar_nbg.sh"
     echo
-    echo "    2. Copie o .nb para edge/ nesta placa e valide isolado:"
-    echo "       vpm_run edge/yolov8n-pose.nb"
+    echo "    2. Copie o .nb para esta placa e valide isolado. O vpm_run"
+    echo "       recebe um arquivo de configuração, não o .nb direto:"
+    echo "         printf '[network]\\n./yolov8n-pose.nb\\n' > sample.txt"
+    echo "         vpm_run sample.txt"
     echo
     echo "    3. Só então aponte a engine:"
     echo "       POSE_MODEL_PATH=edge/yolov8n-pose.nb"
