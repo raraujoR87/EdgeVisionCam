@@ -14,7 +14,7 @@
 set -uo pipefail
 
 IMAGEM="${IMAGEM:-ubuntu-npu:v2.0.10.1}"
-URL_IMAGEM="https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/docker_images_v2.0.x.zip"
+URL_IMAGEM="https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/"
 INSTALAR_DOCKER="${INSTALAR_DOCKER:-0}"
 
 titulo(){ printf "\n\033[1m== %s ==\033[0m\n" "$1"; }
@@ -139,14 +139,20 @@ if docker image inspect "$IMAGEM" >/dev/null 2>&1; then
 else
     erro "$IMAGEM não está carregada."
     echo
-    echo "  Esta imagem NÃO está no Docker Hub. Vem da Allwinner:"
+    echo "  Esta imagem NÃO está no Docker Hub. Vem da Netdisk da Allwinner:"
     echo
     echo "    $URL_IMAGEM"
-    echo "    (~11 GB, contém ubuntu-npu:v2.0.10.1 com ACUITY 6.30.22)"
+    echo
+    echo "  'docker_images_v2.0.x' é uma PASTA. Entre nela e baixe o arquivo:"
+    echo "    docker_images_v2.0.x/ubuntu-npu_v2.0.10.1.tar.zip   (~11 GB)"
+    echo
+    echo "  NÃO use 'baixar pasta': o Synology monta esse zip durante a"
+    echo "  transferência e trunca com frequência nesse tamanho. O sintoma é"
+    echo "  o unzip recusar com 'End-of-central-directory signature not found'."
     echo
     echo "  Depois de baixar:"
-    echo "    unzip docker_images_v2.0.x.zip"
-    echo "    docker load < ubuntu-npu-v2.0.10.1.tar"
+    echo "    unzip ubuntu-npu_v2.0.10.1.tar.zip"
+    echo "    docker load -i ubuntu-npu_v2.0.10.1.tar"
     echo
     echo "  Confira com:"
     echo "    docker run --rm $IMAGEM bash -c 'ls /root/acuity-toolkit-whl-*/bin'"

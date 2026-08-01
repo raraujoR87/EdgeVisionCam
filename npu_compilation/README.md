@@ -91,24 +91,49 @@ dependências Python.
 
 ### A imagem do ACUITY
 
-**Não está no Docker Hub.** É um download da Allwinner:
+**Não está no Docker Hub.** É um download da Netdisk da Allwinner:
 
 ```
-https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/docker_images_v2.0.x.zip
+https://netstorage.allwinnertech.com:5001/fsdownload/Mh23BhPHq/
 ```
 
-~11 GB, contém `ubuntu-npu:v2.0.10.1` com ACUITY 6.30.22.
+`docker_images_v2.0.x` é uma **pasta**, não um arquivo. Entre nela e baixe:
+
+```
+docker_images_v2.0.x/ubuntu-npu_v2.0.10.1.tar.zip
+```
+
+**Não use "baixar pasta".** O Synology monta esse zip em tempo real durante a
+transferência, e para 11 GB ele trunca com frequência. O resultado é um arquivo
+aparentemente completo que o `unzip` recusa com *"End-of-central-directory
+signature not found"* — sem indicar que a causa foi o download.
 
 ```bash
-unzip docker_images_v2.0.x.zip
-docker load < ubuntu-npu-v2.0.10.1.tar
+unzip ubuntu-npu_v2.0.10.1.tar.zip
+docker load -i ubuntu-npu_v2.0.10.1.tar
 docker run --rm ubuntu-npu:v2.0.10.1 bash -c 'ls /root/acuity-toolkit-whl-*/bin'
 ```
 
 Reserve ~35 GB no pico (zip + extraído + imagem carregada). O zip e o `.tar`
 podem ser apagados depois do `docker load`.
 
+Se o link estiver fora do ar, o roteiro oficial está em
+`docs.radxa.com/en/cubie/a7a/app-dev/npu-dev/cubie_acuity_env`.
+
 Não há substituto aberto: o formato NBG é proprietário e o compilador também.
+
+### Se o unzip reclamar
+
+```bash
+ls -lh ubuntu-npu_v2.0.10.1.tar.zip   # esperado: ~11 GB
+file ubuntu-npu_v2.0.10.1.tar.zip     # esperado: "Zip archive data"
+```
+
+| O que aparece | O que aconteceu |
+|---|---|
+| poucos KB, `HTML document` | veio a página de login/erro, não o arquivo |
+| tamanho parcial | download interrompido — refaça, de preferência com um gerenciador que retome |
+| ~11 GB mas `unzip` falha | baixou a pasta em vez do arquivo, ou o zip truncou |
 
 ## Passo 1 — ONNX
 
