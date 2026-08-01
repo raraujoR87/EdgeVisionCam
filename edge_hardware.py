@@ -36,8 +36,10 @@ import os
 # clássica Vivante/galcore usada em outros SoCs. Procurar galcore devolve
 # "NPU ausente" numa placa cuja NPU está perfeitamente funcional — foi assim
 # que esta configuração passou semanas rodando em CPU sem ninguém notar.
+# O nome do modulo varia por BSP: `vipcore` na imagem da Radxa para o A733,
+# `sunxi_npu` em builds da Allwinner. Ver edge/viplite.MODULOS_KERNEL.
 NPU_DEVICE = "/dev/vipcore"
-NPU_MODULO = "sunxi_npu"
+NPU_MODULO = "vipcore"
 
 DEVICES_OPCIONAIS = [
     ("/dev/dri", "decode de vídeo por hardware"),
