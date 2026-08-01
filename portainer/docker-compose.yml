@@ -1,0 +1,65 @@
+# ==============================================================================
+# Servidor Portainer — central de gerência da frota de appliances
+#
+# Roda num host com endereço estável e alcançável pela internet (VPS), não no
+# Radxa. Os appliances ficam atrás de NAT em cada loja, então quem inicia a
+# conexão é o Edge Agent da loja — o servidor nunca precisa alcançar a loja.
+#
+# Caddy termina TLS com certificado Let's Encrypt. Isso não é enfeite: sem um
+# certificado válido, o Edge Agent precisa rodar com EDGE_INSECURE_POLL=1, que
+# aceita qualquer certificado e abre o canal de gerência — que tem acesso ao
+# socket Docker da loja — a um ataque de interposição.
+#
+# Subir:
+#   PORTAINER_DOMAIN=portainer.seudominio.com.br \
+#   ACME_EMAIL=voce@empresa.com \
+#   docker compose -f portainer/docker-compose.yml up -d
+# ==============================================================================
+
+services:
+  portainer:
+    image: portainer/portainer-ce:lts
+    container_name: portainer-server
+    restart: always
+    command:
+      # A UI é servida em HTTP interno; quem fala com a internet é o Caddy.
+      - --http-enabled
+    volumes:
+      - portainer_data:/data
+    expose:
+      - "9000"   # UI (HTTP interno, atrás do Caddy)
+    ports:
+      # Túnel dos Edge Agents. Precisa ser exposto direto: o protocolo é TCP
+      # bruto, não HTTP, então não passa por proxy reverso.
+      - "8000:8000"
+    networks:
+      - portainer
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: portainer-caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Sem domínio definido, o Caddy sobe em modo local com certificado
+      # autoassinado — suficiente para testar, inseguro para produção.
+      - PORTAINER_DOMAIN=${PORTAINER_DOMAIN:-localhost}
+      - ACME_EMAIL=${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - portainer
+    networks:
+      - portainer
+
+volumes:
+  portainer_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  portainer:
