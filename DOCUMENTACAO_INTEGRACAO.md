@@ -185,7 +185,7 @@ O Radxa Cubie A7A é equipado com o SoC Allwinner A733, que possui uma NPU **Ver
 ### A. Fluxo de Compilação do Modelo (.pt -> .nbg)
 Para converter o modelo PyTorch (.pt) para o formato do NPU (.nbg - Network Binary Graph), criamos os scripts na pasta [npu_compilation/](file:///c:/Sistemas/Gemini/VisionCam/EdgeAI/npu_compilation):
 1. **`prepare_calibration.py`**: Baixa imagens de exemplo e gera o arquivo `calibrate_dataset.txt` para calibrar o modelo durante a quantização.
-2. **`acuity_export_yolo.sh`**: Script para ser rodado dentro do contêiner Docker **Acuity Pegasus** (fornecido pela Radxa). Ele importa o modelo ONNX, realiza a **quantização INT8** e exporta o arquivo `.nbg` compilado para o VIP9000.
+2. **`compilar_nbg.sh`**: roda dentro do contêiner **ACUITY** (`ubuntu-npu:v2.0.10.1`, distribuído pela Allwinner). Importa o ONNX, quantiza em INT8 por canal e exporta o `.nb` empacotado para o driver **VIPLite** (`--pack-nbg-viplite`). Ver `npu_compilation/README.md`.
 
 ### B. Execução na Placa
 No código do VisionCam, implementamos o módulo [vivante_pose_engine.py](file:///c:/Sistemas/Gemini/VisionCam/EdgeAI/edge/vivante_pose_engine.py).

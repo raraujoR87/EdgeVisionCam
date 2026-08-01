@@ -108,7 +108,7 @@ def test_decode_end_to_end_sem_deteccao():
 
 
 def test_decode_por_ancoras_converte_cxcywh_para_xyxy():
-    """Layout classico do YOLOv8, que e o gerado por acuity_export_yolo.sh."""
+    """Layout classico do YOLOv8, que e o gerado por compilar_nbg.sh."""
     ancoras = np.zeros((5 + NUM_KEYPOINTS * 3, 3), dtype=np.float32)
     # coluna 0: caixa centrada em (100,100) com 40x60 → (80,70,120,130)
     ancoras[:5, 0] = [100, 100, 40, 60, 0.9]
@@ -182,7 +182,7 @@ def test_decoder_reproduz_o_ultralytics(modelo):
     ultralytics produz para a mesma imagem.
 
     Cobre os dois layouts com dados reais — o caminho por ancoras (YOLOv8) e o
-    que `acuity_export_yolo.sh` compila por padrao, entao validar so o
+    que `compilar_nbg.sh` compila por padrao, entao validar so o
     end-to-end deixaria justamente o caminho de producao sem cobertura.
 
     A diferenca residual vem do letterbox: o ultralytics usa retangulo alinhado

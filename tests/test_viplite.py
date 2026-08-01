@@ -281,3 +281,61 @@ def test_sem_quantizacao_preserva_float():
 def test_contagem_de_elementos():
     tensor = viplite.Tensor(0, 2, [1, 3, 320, 320], viplite.QUANT_NONE, 1.0, 0, 0)
     assert tensor.elementos == 1 * 3 * 320 * 320
+
+
+# ── Pipeline de compilação ─────────────────────────────────────────
+
+def _script_compilacao():
+    caminho = os.path.join(os.path.dirname(__file__), "..", "npu_compilation", "compilar_nbg.sh")
+    with open(caminho, encoding="utf-8") as arquivo:
+        return arquivo.read()
+
+
+def test_empacotamento_e_viplite_nao_unify():
+    """
+    O exemplo do ai-sdk usa --pack-nbg-unify, para o driver unificado. Esta
+    placa roda VIPLite: o grafo errado carrega e falha depois, no meio da
+    inferência, com erro que não aponta o empacotamento.
+    """
+    script = _script_compilacao()
+    assert "--pack-nbg-viplite" in script
+
+    # Só linhas de comando: o comentário que explica a diferença precisa citar
+    # os dois nomes.
+    codigo = [l for l in script.splitlines() if not l.lstrip().startswith("#")]
+    assert not any("--pack-nbg-unify" in linha for linha in codigo)
+
+
+def test_quantizacao_padrao_e_por_canal():
+    """
+    As cabeças do YOLO têm faixas dinâmicas muito diferentes entre si. Escala
+    única por tensor achata as menores até sumirem — queda de recall, não erro.
+    """
+    script = _script_compilacao()
+    assert 'QUANT:-pcq' in script
+    assert "perchannel_symmetric_affine" in script
+
+
+def test_preprocessamento_da_calibracao_casa_com_a_engine():
+    """
+    A engine alimenta canvas_rgb/255.0. Se a calibração vir pixels 0-255, a
+    quantização fica dimensionada para uma distribuição que nunca ocorre em
+    produção — e nada nisso gera erro.
+    """
+    from edge import vivante_pose_engine as vpe
+
+    script = _script_compilacao()
+    # 1/255 = 0.00392157
+    assert "0 0 0 0.00392157" in script
+    assert "/ 255.0" in open(vpe.__file__, encoding="utf-8").read()
+
+
+def test_extensao_do_grafo_aceita_a_que_o_acuity_gera():
+    """
+    O ACUITY nomeia a saída network_binary.nb. Aceitar só `.nbg` fazia o grafo
+    cair no caminho de CPU sem aviso nenhum.
+    """
+    from edge import vivante_pose_engine as vpe
+
+    assert ".nb" in vpe.EXTENSOES_NBG
+    assert ".nbg" in vpe.EXTENSOES_NBG

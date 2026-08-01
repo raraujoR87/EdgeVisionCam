@@ -134,31 +134,35 @@ segredo atual; digitar substitui.
 ### 2.5 Aceleração NPU (opcional)
 
 Por padrão a inferência roda em CPU (~120–145 ms por ciclo), com throttle de
-5 FPS. Para usar a NPU VeriSilicon VIP9000 (driver VIPLite):
+5 FPS. A NPU VeriSilicon VIP9000 (3 TOPS) é a margem que justifica o esforço.
+
+**Na placa** — confirme a pilha e instale o runtime:
 
 ```bash
-python3 npu_compilation/export_onnx.py            # modelo → ONNX
-python3 npu_compilation/prepare_calibration.py    # calibração (usa a câmera da loja)
-bash    npu_compilation/acuity_export_yolo.sh     # ONNX → NBG (Docker Acuity, x86)
+bash deploy/npu_diagnostico.sh     # node /dev/vipcore, módulo, libs, versão
+bash deploy/instalar_npu_sdk.sh    # copia as bibliotecas VIPLite do ai-sdk
 ```
 
-Antes de qualquer coisa, confirme que a placa tem a pilha da NPU:
+**No PC x86** — compile o modelo. A NPU não executa `.pt` nem `.onnx`, só NBG,
+e o compilador ACUITY é x86-only:
 
 ```bash
-bash deploy/npu_diagnostico.sh
+bash    npu_compilation/preparar_host.sh       # Docker + imagem do ACUITY
+python3 npu_compilation/export_onnx.py         # modelo → ONNX
+python3 npu_compilation/prepare_calibration.py # calibração (câmera da loja!)
+bash    npu_compilation/compilar_nbg.sh        # ONNX → .nb
 ```
 
-Ele verifica o node `/dev/vipcore`, o módulo `sunxi_npu`, as bibliotecas
-VIPLite e a versão do driver. **A versão importa**: um NBG gerado por um ACUITY
-de versão diferente da do driver é recusado no carregamento, e a mensagem do
-runtime não indica que a causa é essa.
+Rode a calibração **com a câmera da loja conectada** — a quantização INT8
+dimensiona as escalas a partir dessas imagens, e calibrar com cenas genéricas
+derruba a precisão no dispositivo sem aparecer em teste algum.
 
-Copie o `.nbg` para `edge/` na placa e valide isoladamente antes de apontar a
-engine — `vpm_run` executa qualquer NBG e separa "modelo ruim" de "integração
-ruim":
+**De volta à placa** — valide isoladamente antes de apontar a engine.
+`vpm_run` executa qualquer NBG e separa "modelo ruim" de "integração ruim":
 
 ```bash
-vpm_run edge/yolov8n-pose.nbg
+scp edge/yolov8n-pose.nb radxa@IP:~/EdgeVisionCam/edge/
+vpm_run edge/yolov8n-pose.nb
 ```
 
 Só então:
@@ -166,13 +170,14 @@ Só então:
 ```yaml
 # docker-compose.yml, serviço visioncam-core
 environment:
-  - POSE_MODEL_PATH=edge/yolov8n-pose.nbg
+  - POSE_MODEL_PATH=edge/yolov8n-pose.nb
 ```
 
 A telemetria passa a reportar `ACTIVE_VIPLITE` no lugar de `CPU_FALLBACK`.
-Rode o passo de calibração **com a câmera da loja conectada** — a quantização
-INT8 dimensiona as escalas a partir dessas imagens, e calibrar com cenas
-genéricas derruba a precisão no dispositivo sem aparecer em teste algum.
+
+> **A imagem do ACUITY não está no Docker Hub** — é um download de ~11 GB da
+> Allwinner. E o parâmetro `--optimize` do compilador ainda não foi validado no
+> silício. Detalhes e alternativas em **`npu_compilation/README.md`**.
 
 ---
 

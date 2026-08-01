@@ -3,7 +3,11 @@ Adaptador do motor de pose para a NPU Vivante (VIP9000) do Radxa A7A.
 
 Expoe a mesma interface que `vision_engine` usa com o `ultralytics.YOLO`
 (`__call__` e `track`), de modo que trocar `POSE_MODEL_PATH` para um arquivo
-`.nbg` baste para mover a inferencia da CPU para a NPU.
+grafo compilado baste para mover a inferencia da CPU para a NPU.
+
+O ACUITY nomeia a saida `network_binary.nb` — extensao `.nb`, nao `.nbg`. O
+projeto usava so `.nbg`, entao um grafo compilado com o nome que a ferramenta
+de fato gera caia silenciosamente no caminho de CPU. Ambas sao aceitas.
 
 Formatos de saida suportados
 ----------------------------
@@ -16,7 +20,7 @@ escolhe entre eles pelo formato do tensor:
   `yolo26n-pose.onnx` exportado com `imgsz=320`.
 - **Classico, `(1, 56, A)`** — YOLOv8/v11. Sao ancoras brutas
   `[cx, cy, w, h, conf, kpts...]` que exigem transposicao, filtro por confianca
-  e NMS na CPU. E o formato que `npu_compilation/acuity_export_yolo.sh` gera,
+  e NMS na CPU. E o formato que `npu_compilation/compilar_nbg.sh` gera,
   ja que ele parte de `yolov8n-pose.onnx`.
 
 Coordenadas
@@ -37,6 +41,11 @@ import numpy as np
 LETTERBOX_PAD = 114
 
 NUM_KEYPOINTS = 17  # esqueleto COCO
+
+# Extensoes de grafo compilado. `.nb` e a que o ACUITY realmente produz
+# (network_binary.nb); `.nbg` aparece na documentacao e em modelos renomeados
+# a mao. Aceitar so uma faz o grafo cair no caminho de CPU sem aviso.
+EXTENSOES_NBG = ('.nb', '.nbg')
 
 
 class VivanteBoxes:
@@ -283,7 +292,7 @@ class VivantePoseEngine:
         self.torch_model = None
         self.tracker = IoUTracker()
 
-        if model_path.endswith('.nbg'):
+        if model_path.endswith(EXTENSOES_NBG):
             self._carregar_npu(model_path)
         else:
             self.fallback_to_pytorch()
@@ -332,7 +341,11 @@ class VivantePoseEngine:
         try:
             from ultralytics import YOLO
 
-            pt_path = self.model_path.replace('.nbg', '.pt')
+            pt_path = self.model_path
+            for extensao in EXTENSOES_NBG:
+                if pt_path.endswith(extensao):
+                    pt_path = pt_path[: -len(extensao)] + '.pt'
+                    break
             if not os.path.exists(pt_path):
                 # Mesmo padrao do resto do sistema — ver POSE_MODEL_PATH em
                 # edge/vision_engine.py.

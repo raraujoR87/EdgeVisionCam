@@ -164,7 +164,7 @@ Não é erro de decodificação.
 ```bash
 python3 npu_compilation/export_onnx.py            # 1. modelo → ONNX
 python3 npu_compilation/prepare_calibration.py    # 2. dataset de calibração
-bash    npu_compilation/acuity_export_yolo.sh     # 3. ONNX → NBG (Docker Acuity)
+bash    npu_compilation/compilar_nbg.sh           # 3. ONNX → NBG (Docker ACUITY)
 export POSE_MODEL_PATH=edge/yolov8n-pose.nbg      # 4. aponta a engine
 ```
 

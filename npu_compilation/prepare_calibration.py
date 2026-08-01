@@ -184,7 +184,7 @@ def main():
             "loja conectada, ou depois que houver clipes de evento gravados."
         )
 
-    print("\nPróximo passo: bash npu_compilation/acuity_export_yolo.sh (no Docker Acuity)")
+    print("\nPróximo passo: bash npu_compilation/compilar_nbg.sh")
     return 0
 
 
