@@ -67,6 +67,7 @@ echo "🚀 [4/4] Inicializando os serviços da VisionCam em modo Automático..."
 MGMT_MODE="portainer-agent"  # Mantém comportamento original local/VPN por padrão
 EDGE_KEY=""
 EDGE_ID=""
+EDGE_INSECURE_POLL=""
 DOCKER_USER=""
 DOCKER_PASS=""
 
@@ -84,6 +85,12 @@ while [[ $# -gt 0 ]]; do
     --edge-id)
       EDGE_ID="$2"
       shift 2
+      ;;
+    --edge-insecure-poll)
+      # Só para servidor Portainer com certificado autoassinado. Ver a nota em
+      # bootstrap_installer.py antes de usar em produção.
+      EDGE_INSECURE_POLL="--edge-insecure-poll"
+      shift
       ;;
     --user)
       DOCKER_USER="$2"
@@ -104,6 +111,7 @@ python3 bootstrap_installer.py --auto \
   --mgmt-mode "$MGMT_MODE" \
   --edge-key "$EDGE_KEY" \
   --edge-id "$EDGE_ID" \
+  $EDGE_INSECURE_POLL \
   --user "$DOCKER_USER" \
   --pass "$DOCKER_PASS"
 

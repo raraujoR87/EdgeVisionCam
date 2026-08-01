@@ -13,6 +13,8 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const { cpu_usage, ram_usage, npu_status } = body;
+    // Opcional: appliances em versão anterior não enviam este campo.
+    const inference_ms = body.inference_ms ?? null;
 
     if (cpu_usage === undefined || ram_usage === undefined || !npu_status) {
       return NextResponse.json({ error: 'Campos obrigatórios ausentes: cpu_usage, ram_usage, npu_status' }, { status: 400 });
@@ -28,15 +30,16 @@ export async function POST(request: Request) {
 
     // 2. Inserir ou Atualizar o status do hardware
     await query(`
-      INSERT INTO hardware_status (store_id, cpu_usage, ram_usage, npu_status, last_seen)
-      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-      ON CONFLICT (store_id) 
-      DO UPDATE SET 
+      INSERT INTO hardware_status (store_id, cpu_usage, ram_usage, npu_status, inference_ms, last_seen)
+      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+      ON CONFLICT (store_id)
+      DO UPDATE SET
         cpu_usage = EXCLUDED.cpu_usage,
         ram_usage = EXCLUDED.ram_usage,
         npu_status = EXCLUDED.npu_status,
+        inference_ms = EXCLUDED.inference_ms,
         last_seen = CURRENT_TIMESTAMP
-    `, [storeId, cpu_usage, ram_usage, npu_status]);
+    `, [storeId, cpu_usage, ram_usage, npu_status, inference_ms]);
 
     return NextResponse.json({ success: true, store: storeRes.rows[0].name });
   } catch (error: any) {

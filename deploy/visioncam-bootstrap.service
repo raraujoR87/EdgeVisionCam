@@ -1,0 +1,30 @@
+[Unit]
+# Sobe o instalador assim que a placa liga.
+#
+# Sem isso, alguém precisa dar SSH no Radxa para iniciar o bootstrap — o que
+# anula o ganho do fluxo "plugar, abrir a URL, clicar em instalar": se o técnico
+# já tem que abrir um terminal, o formulário web não economiza nada.
+Description=VisionCam Bootstrap Installer
+Documentation=https://github.com/raraujoR87/EdgeVisionCam
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/radxa/EdgeVisionCam
+ExecStart=/usr/bin/python3 /home/radxa/EdgeVisionCam/bootstrap_installer.py
+
+# O instalador chama `docker compose`, que exige acesso ao socket. Rodar como
+# root aqui é aceitável porque este serviço existe só até a instalação terminar
+# — depois dela, os containers rodam com o privilégio reduzido definido no
+# docker-compose.yml.
+User=root
+
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

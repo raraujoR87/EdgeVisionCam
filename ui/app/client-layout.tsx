@@ -1,7 +1,7 @@
 "use client"
 import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink } from 'lucide-react'
+import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { getApiUrl } from './utils/api'
 
@@ -14,6 +14,9 @@ interface UserSession {
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const isLoginPage = pathname === '/login'
+  // Telas que se desenham sozinhas, fora do chrome do console.
+  const isChangePasswordPage = pathname === '/change-password'
+  const isStandalonePage = isLoginPage || isChangePasswordPage
   const [user, setUser] = useState<UserSession | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -27,6 +30,12 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     }
 
     const token = localStorage.getItem('admin_token')
+    // A tela de troca precisa do token para chamar change-password, mas nao
+    // deve exigir que o resto da API esteja liberado.
+    if (isChangePasswordPage && token) {
+      setIsLoading(false)
+      return
+    }
     if (!token) {
       setIsAuthenticated(false)
       setIsLoading(false)
@@ -44,6 +53,12 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         throw new Error('Sessão inválida')
       })
       .then(data => {
+        // Senha de fabrica em uso: a API recusa todo o resto com 403, entao
+        // nao adianta renderizar o console.
+        if (data.must_change_password && !isChangePasswordPage) {
+          window.location.href = '/change-password'
+          return
+        }
         setIsAuthenticated(true)
         setUser(data.user)
       })
@@ -56,7 +71,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         setIsLoading(false)
       })
     }
-  }, [pathname, isLoginPage])
+  }, [pathname, isLoginPage, isChangePasswordPage])
 
   // Redirecionamento de segurança para Clientes
   useEffect(() => {
@@ -82,7 +97,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     )
   }
 
-  if (isLoginPage) {
+  if (isStandalonePage) {
     return <>{children}</>
   }
 
@@ -117,6 +132,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               <Link href="/dashboard/events" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/events' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Shield size={20} />
                 <span className="font-medium">Auditoria Global</span>
+              </Link>
+              <Link href="/dashboard/deploys" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/deploys' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <Server size={20} />
+                <span className="font-medium">Deploys da Frota</span>
               </Link>
               <Link href="/" className="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-slate-800 hover:text-white rounded-xl transition-colors">
                 <ExternalLink size={20} />

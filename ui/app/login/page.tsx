@@ -29,10 +29,19 @@ export default function Login() {
         const data = await res.json()
         localStorage.setItem('admin_token', data.token)
         document.cookie = `admin_token=${data.token}; path=/; max-age=604800; SameSite=Strict`;
+
+        // Senha de fabrica: a API bloqueia o resto do sistema ate a troca.
+        if (data.must_change_password) {
+          window.location.href = '/change-password'
+          return
+        }
+
         window.location.href = isLocalOnly ? '/' : '/dashboard'
       } else {
+        // A API do appliance (FastAPI) responde em `detail`; a da nuvem
+        // (route handler do Next) responde em `error`.
         const errData = await res.json()
-        setError(errData.error || 'Falha na autenticação.')
+        setError(errData.detail || errData.error || 'Falha na autenticação.')
       }
     } catch (err) {
       setError('Erro de rede. Verifique se o servidor está ativo.')

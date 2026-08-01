@@ -8,6 +8,8 @@ import urllib.request
 import os
 import time
 
+import edge_provisioning
+
 PORT = 8080
 
 # Thread-safe deployment state
@@ -40,6 +42,23 @@ def check_docker():
     except Exception:
         return None
 
+# Override gerado pelo instalador com o servico de gerencia escolhido. O stack
+# base vive no docker-compose.yml versionado e nao e reescrito.
+MGMT_OVERRIDE = "docker-compose.mgmt.yml"
+
+
+def compose_cmd(*args):
+    """
+    Monta o comando do Compose incluindo o override de gerencia, quando existir.
+
+    A ordem importa: o Compose sobrepoe os arquivos na sequencia informada.
+    """
+    cmd = ["docker", "compose", "-f", "docker-compose.yml"]
+    if os.path.exists(MGMT_OVERRIDE):
+        cmd += ["-f", MGMT_OVERRIDE]
+    return cmd + list(args)
+
+
 def check_docker_compose():
     try:
         res = subprocess.run(["docker", "compose", "version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
@@ -47,7 +66,8 @@ def check_docker_compose():
     except Exception:
         return None
 
-def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edge_id=""):
+def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edge_id="",
+                          edge_insecure_poll=False, codigo="", cloud_url=""):
     global deploy_state
     deploy_state["is_deploying"] = True
     deploy_state["success"] = False
@@ -55,7 +75,41 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
     deploy_state["logs"] = []
     
     add_log("Iniciando processo de deploy automático no Radxa Cubie...")
-    
+
+    # 0. Provisionamento pela nuvem
+    #
+    # Quando o técnico informa um código, ele substitui tudo o que antes era
+    # digitado à mão: chave da loja, versão alvo e Edge key vêm prontas da
+    # nuvem. Isso roda antes de qualquer outra etapa porque um código inválido
+    # deve falhar de imediato, não depois de baixar alguns GB de imagem.
+    if codigo:
+        add_log("Resgatando configuração da loja na nuvem...")
+        try:
+            config = edge_provisioning.resgatar(codigo, cloud_url or None)
+        except edge_provisioning.ErroDeProvisionamento as erro:
+            add_log(f"Provisionamento recusado: {erro}")
+            deploy_state["is_deploying"] = False
+            deploy_state["error"] = str(erro)
+            return
+
+        loja = config.get("store", {})
+        deploy_cfg = config.get("deploy", {})
+
+        # O código é de uso único: gravar antes de qualquer passo que possa
+        # abortar evita que uma falha adiante exija emitir outro código.
+        gravadas = edge_provisioning.gravar_env(config, cloud_url or None)
+
+        add_log(f"Loja identificada: {loja.get('name', '(sem nome)')}")
+        add_log(f"Versão alvo: {gravadas['VISIONCAM_TAG']}")
+
+        # A nuvem decide o modo de gerência: sem Edge key não há Portainer
+        # central, e subir um agente pela metade só geraria ruído no painel.
+        mgmt_mode = deploy_cfg.get("mgmt_mode", "none")
+        edge_key = deploy_cfg.get("edge_key", "") or edge_key
+        if not edge_id:
+            edge_id = loja.get("name", "") or edge_id
+        add_log(f"Gerência de containers: {mgmt_mode}")
+
     # 1. Login Docker Hub
     if username and password:
         add_log(f"Autenticando no Docker Hub com o usuário: {username}...")
@@ -83,21 +137,37 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
     else:
         add_log("Nenhuma credencial fornecida. Tentando baixar imagens públicas...")
 
-    # 2. Escrever docker-compose.yml
-    add_log("Gerando arquivo de configuração docker-compose.yml local...")
-    
-    # Determina o bloco do gerenciador (Portainer Agent ou Edge Agent ou nenhum)
+    # 2. Escrever o override de gerência (o stack base vem do repositório)
+    #
+    # Este instalador antes carregava uma cópia inteira do docker-compose.yml
+    # como f-string e sobrescrevia o arquivo do repositório. Eram duas
+    # definições divergentes do mesmo stack: correções de limite de memória,
+    # rotação de log ou healthcheck feitas no repositório nunca chegavam ao
+    # appliance, porque o instalador as apagava no deploy seguinte.
+    #
+    # Agora o docker-compose.yml versionado é a única fonte, e daqui sai apenas
+    # o serviço de gerência escolhido, num arquivo de override que o Compose
+    # sobrepõe ao base.
+    add_log("Preparando configuração de gerência de containers...")
+
     mgmt_service = ""
     if mgmt_mode == "portainer-agent":
         mgmt_service = """  portainer-agent:
     image: portainer/agent:latest
     container_name: visioncam-portainer-agent
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "9001:9001"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - visioncam
 """
     elif mgmt_mode == "portainer-edge-agent":
         if not edge_id:
@@ -105,100 +175,55 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
                 edge_id = f"edge-{socket.gethostname()}"
             except Exception:
                 edge_id = "edge-device"
+        # EDGE_INSECURE_POLL desliga a verificacao do certificado do servidor.
+        # O canal de gerencia tem acesso ao socket Docker da loja, entao aceitar
+        # qualquer certificado permite que um atacante interposto implante
+        # containers arbitrarios no appliance. So e aceitavel enquanto o
+        # Portainer estiver com certificado autoassinado; com o servidor de
+        # portainer/docker-compose.yml (TLS via Let's Encrypt), deve ficar em 0.
+        insecure_poll = "1" if edge_insecure_poll else "0"
         mgmt_service = f"""  portainer-edge-agent:
     image: portainer/edge-agent:latest
     container_name: visioncam-portainer-edge-agent
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - EDGE_KEY={edge_key}
       - EDGE_ID={edge_id}
-      - EDGE_INSECURE_POLL=1
+      - EDGE_INSECURE_POLL={insecure_poll}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/volumes:/var/lib/docker/volumes
+    networks:
+      - visioncam
 """
 
-    compose_content = f"""version: '3.8'
-
-services:
-{mgmt_service}
-  mqtt:
-    image: eclipse-mosquitto:2
-    container_name: visioncam-mqtt
-    restart: always
-    ports:
-      - "1883:1883"
-    volumes:
-      - mqtt_data:/mosquitto/data
-      - mqtt_log:/mosquitto/log
-
-  frigate:
-    image: ghcr.io/blakeblackshear/frigate:stable
-    container_name: visioncam-frigate
-    restart: always
-    privileged: true
-    shm_size: "128mb"
-    devices:
-      - /dev/dri:/dev/dri
-      - /dev/galcore:/dev/galcore
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - ./frigate_config.yml:/config/config.yml
-      - ./storage/clips:/media/frigate/clips
-    ports:
-      - "5000:5000"
-      - "8554:8554"
-    depends_on:
-      - mqtt
-
-  visioncam-core:
-    image: raphael7araujo/visioncam-core:latest
-    container_name: visioncam-core
-    restart: always
-    environment:
-      - FRIGATE_URL=http://frigate:5000
-      - MQTT_HOST=mqtt
-      - CLOUD_API_URL=https://api.visioncam.com.br/v1
-    volumes:
-      - db_data:/app/core/database/data
-      - ./storage/events:/app/edge/storage/events
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./frigate_config.yml:/app/frigate_config.yml
-    ports:
-      - "8090:8090"
-      - "8000:8000"
-    depends_on:
-      - frigate
-      - mqtt
-
-  visioncam-ui:
-    image: raphael7araujo/visioncam-ui:latest
-    container_name: visioncam-ui-local
-    restart: always
-    ports:
-      - "3000:3000"
-    volumes:
-      - db_data:/app/core/database/data
-    environment:
-      - NEXT_PUBLIC_API_URL=http://visioncam-core:8000
-      - NEXT_PUBLIC_LOCAL_ONLY=true
-    depends_on:
-      - visioncam-core
-
-volumes:
-  db_data:
-  mqtt_data:
-  mqtt_log:
-"""
-    try:
-        with open("docker-compose.yml", "w", encoding="utf-8") as f:
-            f.write(compose_content)
-        add_log("Arquivo docker-compose.yml gerado.")
-    except Exception as e:
-        add_log(f"Falha ao escrever docker-compose.yml: {e}")
+    if not os.path.exists("docker-compose.yml"):
+        add_log("ERRO: docker-compose.yml não encontrado. Rode o instalador a partir do clone do repositório.")
         deploy_state["is_deploying"] = False
-        deploy_state["error"] = f"Erro ao criar compose: {e}"
+        deploy_state["error"] = "docker-compose.yml ausente."
         return
+
+    if mgmt_service:
+        try:
+            with open(MGMT_OVERRIDE, "w", encoding="utf-8") as f:
+                f.write("services:\n" + mgmt_service)
+            add_log(f"Override de gerência gerado ({mgmt_mode}).")
+        except Exception as e:
+            add_log(f"Falha ao escrever {MGMT_OVERRIDE}: {e}")
+            deploy_state["is_deploying"] = False
+            deploy_state["error"] = f"Erro ao criar override: {e}"
+            return
+    else:
+        # Sem modo de gerência: remove um override de instalação anterior para
+        # que o agente não continue rodando por inércia.
+        if os.path.exists(MGMT_OVERRIDE):
+            os.remove(MGMT_OVERRIDE)
+        add_log("Nenhum modo de gerência selecionado.")
 
     # 2b. Escrever frigate_config.yml padrão se não existir
     if not os.path.exists("frigate_config.yml"):
@@ -237,7 +262,7 @@ cameras:
     add_log("Iniciando download das imagens do Docker Hub (docker compose pull)...")
     try:
         proc = subprocess.Popen(
-            ["docker", "compose", "pull"],
+            compose_cmd("pull"),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True
@@ -262,7 +287,7 @@ cameras:
     add_log("Subindo containers da stack (docker compose up -d)...")
     try:
         proc = subprocess.Popen(
-            ["docker", "compose", "up", "-d"],
+            compose_cmd("up", "-d"),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True
@@ -342,7 +367,10 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
             mgmt_mode = payload.get("mgmt_mode", "none")
             edge_key = payload.get("edge_key", "")
             edge_id = payload.get("edge_id", "")
-            
+            edge_insecure_poll = bool(payload.get("edge_insecure_poll", False))
+            codigo = payload.get("codigo", "")
+            cloud_url = payload.get("cloud_url", "")
+
             if deploy_state["is_deploying"]:
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
@@ -351,7 +379,12 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             # Inicia o deploy em outra thread
-            threading.Thread(target=run_deployment_thread, args=(username, password, mgmt_mode, edge_key, edge_id), daemon=True).start()
+            threading.Thread(
+                target=run_deployment_thread,
+                args=(username, password, mgmt_mode, edge_key, edge_id,
+                      edge_insecure_poll, codigo, cloud_url),
+                daemon=True,
+            ).start()
             
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -502,6 +535,17 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
             line-height: 1.6;
             white-space: pre-wrap;
         }
+        .codigo-input {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 2rem; font-weight: 800; letter-spacing: 0.25em;
+            text-align: center; text-transform: uppercase;
+        }
+        .dica { font-size: 0.78rem; color: #94a3b8; margin-top: 8px; line-height: 1.5; }
+        .avancado { margin-top: 18px; border-top: 1px solid #1e293b; padding-top: 14px; }
+        .avancado summary {
+            cursor: pointer; font-size: 0.8rem; color: #64748b;
+            text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700;
+        }
     </style>
     <script>
         let pollInterval = null;
@@ -578,6 +622,13 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
             }
         }
 
+        // Insere o hifen e forca maiusculas enquanto o tecnico digita, para que
+        // o campo ja mostre o mesmo formato impresso no console.
+        function formatarCodigo(campo) {
+            let v = campo.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+            campo.value = v.length > 4 ? v.slice(0, 4) + '-' + v.slice(4) : v;
+        }
+
         async function startDeploy(e) {
             e.preventDefault();
             const user = document.getElementById('user').value;
@@ -642,30 +693,51 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
 
         <form onsubmit="startDeploy(event)">
             <div class="form-group">
-                <label class="field-label">Docker Hub Username (Opcional)</label>
-                <input type="text" id="user" placeholder="ex: visioncam_admin (vazio para imagens públicas)">
+                <label class="field-label">Código de Provisionamento</label>
+                <input type="text" id="codigo" class="codigo-input"
+                       placeholder="XXXX-XXXX" maxlength="9" autocomplete="off"
+                       autocapitalize="characters" spellcheck="false"
+                       oninput="formatarCodigo(this)">
+                <p class="dica">
+                    Emitido no console de nuvem, em <strong>Deploys da Frota</strong>.
+                    O código traz a loja, a versão e a gerência de containers —
+                    nenhuma credencial precisa ser digitada aqui.
+                </p>
             </div>
-            <div class="form-group">
-                <label class="field-label">Docker Hub Access Token / Password (Opcional)</label>
-                <input type="password" id="pass" placeholder="dckr_pat_... (vazio para imagens públicas)">
-            </div>
-            <div class="form-group">
-                <label class="field-label">Modo de Gerenciamento de Contêineres</label>
-                <select id="mgmt_mode" class="form-select" onchange="toggleEdgeFields()">
-                    <option value="none">Nenhum (Standalone)</option>
-                    <option value="portainer-agent" selected>Portainer Agent (Local/VPN na porta 9001)</option>
-                    <option value="portainer-edge-agent">Portainer Edge Agent (Multi-Cliente Nuvem)</option>
-                </select>
-            </div>
-            <div id="edge-fields" style="display: none;">
+
+            <details class="avancado">
+                <summary>Instalação sem código (avançado)</summary>
+                <p class="dica">
+                    Use apenas em laboratório ou se a loja não tem acesso à nuvem.
+                    O appliance sobe sem vínculo com nenhuma loja e não envia telemetria.
+                </p>
                 <div class="form-group">
-                    <label class="field-label">Portainer Edge Key</label>
-                    <input type="text" id="edge_key" placeholder="EDGE_KEY gerada pelo Portainer Central">
+                    <label class="field-label">Docker Hub — usuário (opcional)</label>
+                    <input type="text" id="user" placeholder="vazio para imagens públicas">
                 </div>
                 <div class="form-group">
-                    <label class="field-label">Edge Device ID (Opcional)</label>
-                    <input type="text" id="edge_id" placeholder="ex: clienteA-loja01 (vazio para usar hostname)">
+                    <label class="field-label">Docker Hub — token (opcional)</label>
+                    <input type="password" id="pass" placeholder="vazio para imagens públicas">
                 </div>
+                <div class="form-group">
+                    <label class="field-label">Modo de gerência</label>
+                    <select id="mgmt_mode" class="form-select" onchange="toggleEdgeFields()">
+                        <option value="none" selected>Nenhum (standalone)</option>
+                        <option value="portainer-agent">Portainer Agent (rede local)</option>
+                        <option value="portainer-edge-agent">Portainer Edge Agent</option>
+                    </select>
+                </div>
+                <div id="edge-fields" style="display: none;">
+                    <div class="form-group">
+                        <label class="field-label">Portainer Edge Key</label>
+                        <input type="text" id="edge_key" placeholder="EDGE_KEY do Portainer central">
+                    </div>
+                    <div class="form-group">
+                        <label class="field-label">Edge Device ID (opcional)</label>
+                        <input type="text" id="edge_id" placeholder="vazio usa o hostname">
+                    </div>
+                </div>
+            </details>
             </div>
             <button type="submit" id="btn-start" class="btn-deploy" disabled>Iniciar Deploy</button>
         </form>
@@ -702,11 +774,28 @@ if __name__ == "__main__":
     parser.add_argument("--mgmt-mode", default="none", choices=["none", "portainer-agent", "portainer-edge-agent"], help="Modo de gerenciamento de containers")
     parser.add_argument("--edge-key", default="", help="Portainer Edge Key")
     parser.add_argument("--edge-id", default="", help="Portainer Edge ID")
-    
+    parser.add_argument(
+        "--edge-insecure-poll",
+        action="store_true",
+        help=(
+            "Aceita certificado inválido do servidor Portainer. Use apenas com "
+            "servidor autoassinado: o canal de gerência tem acesso ao socket "
+            "Docker, e sem verificação um atacante interposto pode implantar "
+            "containers arbitrários neste appliance."
+        ),
+    )
+
+    parser.add_argument("--codigo", default="",
+                        help="Codigo de provisionamento emitido no console de nuvem")
+    parser.add_argument("--cloud-url", default="",
+                        help="URL do console de nuvem (padrao: variavel CLOUD_URL)")
+
     args, unknown = parser.parse_known_args()
-    
+
     if args.auto:
         print("=== MODO AUTOMÁTICO DETECTADO (DEPLOY DIRETO) ===")
-        run_deployment_thread(args.user, args.password, args.mgmt_mode, args.edge_key, args.edge_id)
+        run_deployment_thread(args.user, args.password, args.mgmt_mode, args.edge_key,
+                              args.edge_id, args.edge_insecure_poll,
+                              args.codigo, args.cloud_url)
     else:
         main()
