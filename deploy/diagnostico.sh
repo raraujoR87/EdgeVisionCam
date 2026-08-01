@@ -42,13 +42,16 @@ esac
 titulo "Memória e armazenamento"
 free -h 2>/dev/null | head -2
 TOTAL_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
-# Os mem_limit do compose somam ~3,7 GB. Numa placa de 2 GB o OOM killer entra
-# em ação sob carga e derruba serviços aparentemente sem relação.
-if [ -n "${TOTAL_MB:-}" ] && [ "$TOTAL_MB" -lt 3500 ]; then
-    aviso "RAM de ${TOTAL_MB}MB. Os limites do compose somam ~3,7GB — reduza"
-    aviso "mem_limit de visioncam-core e frigate antes de subir."
+# Os mem_limit do compose base são calibrados para 4 GB. Em placa menor, o teto
+# de 2 GB do visioncam-core fica acima da RAM física e nunca dispara: o processo
+# consome a placa toda antes disso e o OOM killer derruba outro serviço.
+if [ -n "${TOTAL_MB:-}" ] && [ "$TOTAL_MB" -lt 1800 ]; then
+    aviso "RAM de ${TOTAL_MB}MB — abaixo do recomendado. O instalador aplicará o"
+    aviso "perfil de memória 'mínimo', mas espere reinícios sob carga."
+elif [ -n "${TOTAL_MB:-}" ] && [ "$TOTAL_MB" -lt 3500 ]; then
+    ok "RAM de ${TOTAL_MB}MB — o instalador aplicará o perfil 'reduzido'."
 else
-    ok "RAM suficiente para os limites atuais."
+    ok "RAM suficiente para os limites padrão."
 fi
 echo
 df -h / 2>/dev/null | head -2

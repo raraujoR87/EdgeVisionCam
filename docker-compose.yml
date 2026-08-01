@@ -97,11 +97,14 @@ services:
     restart: always
     logging: *logging-padrao
     # `privileged: true` foi removido: dava acesso a todos os devices e
-    # capacidades do host. Os devices de que o Frigate realmente precisa estão
-    # declarados explicitamente logo abaixo.
-    devices:
-      - /dev/dri:/dev/dri          # decode de vídeo por hardware
-      - /dev/galcore:/dev/galcore  # NPU Vivante
+    # capacidades do host.
+    #
+    # Os devices de aceleração (/dev/dri, /dev/galcore) NÃO são declarados aqui
+    # de propósito. `devices:` é obrigatório no Compose: numa placa cujo kernel
+    # não expõe o galcore, o Frigate simplesmente não sobe, e a mensagem de erro
+    # aponta o device — não o driver ausente, que é a causa real. Como a stack
+    # funciona sem eles (mais lenta, na CPU), essa dependência fica no override
+    # gerado por edge_hardware.py, que só declara o que a placa de fato tem.
     # A memória compartilhada guarda os frames em trânsito. 128m só atende uma
     # câmera 640x480; some ~50m por câmera adicional, senão o Frigate reinicia
     # sozinho sob carga.
@@ -164,6 +167,10 @@ services:
     # Teto acima do uso observado da inferência (~1,2 GB com os dois modelos
     # carregados), com folga. Sem limite, um vazamento aqui leva o OOM killer a
     # escolher uma vítima arbitrária — normalmente o Frigate.
+    #
+    # Estes limites somam ~3,7 GB e pressupõem uma placa de 4 GB. Em hardware
+    # menor, edge_hardware.py os reduz pelo override — a soma estourar a RAM
+    # física seria pior que limite nenhum.
     mem_limit: 2g
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/engine/status',timeout=5)\" || exit 1"]

@@ -58,3 +58,9 @@ Thumbs.db
 # Root environment files
 .env
 
+# Overrides do Compose gerados na própria placa. Versionar qualquer um deles
+# levaria a configuração de um appliance para todos os outros: o de hardware
+# descreve os devices daquela placa, e o de gerência carrega a Edge key.
+docker-compose.hardware.yml
+docker-compose.mgmt.yml
+
