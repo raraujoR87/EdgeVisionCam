@@ -47,7 +47,8 @@ def check_docker_compose():
     except Exception:
         return None
 
-def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edge_id=""):
+def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edge_id="",
+                          edge_insecure_poll=False):
     global deploy_state
     deploy_state["is_deploying"] = True
     deploy_state["success"] = False
@@ -105,6 +106,13 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
                 edge_id = f"edge-{socket.gethostname()}"
             except Exception:
                 edge_id = "edge-device"
+        # EDGE_INSECURE_POLL desliga a verificacao do certificado do servidor.
+        # O canal de gerencia tem acesso ao socket Docker da loja, entao aceitar
+        # qualquer certificado permite que um atacante interposto implante
+        # containers arbitrarios no appliance. So e aceitavel enquanto o
+        # Portainer estiver com certificado autoassinado; com o servidor de
+        # portainer/docker-compose.yml (TLS via Let's Encrypt), deve ficar em 0.
+        insecure_poll = "1" if edge_insecure_poll else "0"
         mgmt_service = f"""  portainer-edge-agent:
     image: portainer/edge-agent:latest
     container_name: visioncam-portainer-edge-agent
@@ -112,7 +120,7 @@ def run_deployment_thread(username, password, mgmt_mode="none", edge_key="", edg
     environment:
       - EDGE_KEY={edge_key}
       - EDGE_ID={edge_id}
-      - EDGE_INSECURE_POLL=1
+      - EDGE_INSECURE_POLL={insecure_poll}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/volumes:/var/lib/docker/volumes
@@ -342,7 +350,8 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
             mgmt_mode = payload.get("mgmt_mode", "none")
             edge_key = payload.get("edge_key", "")
             edge_id = payload.get("edge_id", "")
-            
+            edge_insecure_poll = bool(payload.get("edge_insecure_poll", False))
+
             if deploy_state["is_deploying"]:
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
@@ -351,7 +360,11 @@ class BootstrapHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             # Inicia o deploy em outra thread
-            threading.Thread(target=run_deployment_thread, args=(username, password, mgmt_mode, edge_key, edge_id), daemon=True).start()
+            threading.Thread(
+                target=run_deployment_thread,
+                args=(username, password, mgmt_mode, edge_key, edge_id, edge_insecure_poll),
+                daemon=True,
+            ).start()
             
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -702,11 +715,22 @@ if __name__ == "__main__":
     parser.add_argument("--mgmt-mode", default="none", choices=["none", "portainer-agent", "portainer-edge-agent"], help="Modo de gerenciamento de containers")
     parser.add_argument("--edge-key", default="", help="Portainer Edge Key")
     parser.add_argument("--edge-id", default="", help="Portainer Edge ID")
-    
+    parser.add_argument(
+        "--edge-insecure-poll",
+        action="store_true",
+        help=(
+            "Aceita certificado inválido do servidor Portainer. Use apenas com "
+            "servidor autoassinado: o canal de gerência tem acesso ao socket "
+            "Docker, e sem verificação um atacante interposto pode implantar "
+            "containers arbitrários neste appliance."
+        ),
+    )
+
     args, unknown = parser.parse_known_args()
-    
+
     if args.auto:
         print("=== MODO AUTOMÁTICO DETECTADO (DEPLOY DIRETO) ===")
-        run_deployment_thread(args.user, args.password, args.mgmt_mode, args.edge_key, args.edge_id)
+        run_deployment_thread(args.user, args.password, args.mgmt_mode, args.edge_key,
+                              args.edge_id, args.edge_insecure_poll)
     else:
         main()

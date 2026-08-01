@@ -157,6 +157,41 @@ genéricas derruba a precisão no dispositivo sem aparecer em teste algum.
 
 ---
 
+## Parte 3 — Central Portainer (opcional)
+
+Gerência dos containers de todas as lojas num painel só — logs, restart,
+atualização de imagem — sem SSH em cada Radxa.
+
+O servidor roda num VPS, **não no Radxa**: se morasse dentro de uma loja, a
+gerência da frota cairia junto com aquela loja. Os appliances usam **Edge
+Agent**, que disca para fora, então nenhuma loja precisa de IP fixo nem porta
+aberta no roteador.
+
+```bash
+PORTAINER_DOMAIN=portainer.seudominio.com.br \
+ACME_EMAIL=voce@empresa.com \
+docker compose -f portainer/docker-compose.yml up -d
+```
+
+Depois, por loja: crie o ambiente Edge no painel, copie a Edge key e rode no
+Radxa:
+
+```bash
+sudo bash install.sh \
+  --mgmt-mode portainer-edge-agent \
+  --edge-key '<EDGE KEY>' \
+  --edge-id 'loja-centro'
+```
+
+Passo a passo completo, incluindo firewall e diagnóstico: **`portainer/README.md`**.
+
+> O certificado TLS válido é requisito de segurança, não conveniência: o canal
+> do Edge Agent tem acesso ao socket Docker da loja. Sem verificação de
+> certificado, um atacante interposto implanta containers arbitrários no
+> appliance. Por isso `--edge-insecure-poll` é opt-in explícito.
+
+---
+
 ## Operação
 
 ```bash
@@ -176,6 +211,8 @@ python3 reset_system.py                  # limpar eventos e zonas
 | `CPU_FALLBACK` na telemetria | SDK `timvx` ausente ou `.nbg` não encontrado |
 | Preview sem imagem | Frigate fora do ar; o MJPEG da engine é o fallback |
 | `inference_ms` em 0.0 | Nenhuma inferência rodou ainda — engine parada |
+| Loja *down* no Portainer | Porta 8000 fechada no firewall do servidor |
+| `certificate signed by unknown authority` | Certificado não emitido — confira DNS e porta 80 |
 
 ---
 
