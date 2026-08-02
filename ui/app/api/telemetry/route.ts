@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     let storeId: number;
     let deviceName: string;
 
-    if (deviceRes.rowCount > 0) {
+    if (deviceRes.rowCount && deviceRes.rowCount > 0) {
       // Autenticou via Edge Key (Appliance)
       applianceId = deviceRes.rows[0].id;
       storeId = deviceRes.rows[0].store_id;
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     } else {
       // Fallback para Stores legado (se o dispositivo usar a key da loja antiga)
       const storeRes = await query('SELECT id, name FROM stores WHERE api_key = $1', [apiKey]);
-      if (storeRes.rowCount === 0) {
+      if (!storeRes.rowCount || storeRes.rowCount === 0) {
         return NextResponse.json({ error: 'Chave de API inválida' }, { status: 401 });
       }
       

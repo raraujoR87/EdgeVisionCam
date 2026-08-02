@@ -36,13 +36,13 @@ export async function POST(request: Request) {
       WHERE a.edge_key = $1
     `, [apiKey]);
 
-    if (deviceRes.rowCount > 0) {
+    if (deviceRes.rowCount && deviceRes.rowCount > 0) {
       applianceId = deviceRes.rows[0].appliance_id;
       store = deviceRes.rows[0];
     } else {
       // Fallback legado para Stores (se o dispositivo usar a key antiga)
       const storeRes = await query('SELECT id as store_id, name, telegram_bot_token, telegram_chat_id FROM stores WHERE api_key = $1', [apiKey]);
-      if (storeRes.rowCount === 0) {
+      if (!storeRes.rowCount || storeRes.rowCount === 0) {
         return NextResponse.json({ error: 'Chave de API inválida' }, { status: 401 });
       }
       store = storeRes.rows[0];
