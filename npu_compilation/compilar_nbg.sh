@@ -87,6 +87,22 @@ if [ -z "$IMAGEM" ] || ! docker image inspect "$IMAGEM" >/dev/null 2>&1; then
 fi
 ok "Docker e imagem $IMAGEM"
 
+# O ACUITY grava a representacao intermediaria, as tabelas de quantizacao e o
+# workspace de exportacao — alguns GB. Sob WSL o limite real e o disco do
+# Windows, e ficar sem espaco no meio da quantizacao nao da "disco cheio": da
+# erro de I/O que parece falha do compilador.
+if grep -qi microsoft /proc/version 2>/dev/null && [ -d /mnt/c ]; then
+    WIN_GB=$(df -BG --output=avail /mnt/c 2>/dev/null | tail -1 | tr -dc '0-9')
+    if [ -n "${WIN_GB:-}" ] && [ "$WIN_GB" -lt 10 ]; then
+        erro "Apenas ${WIN_GB} GB livres no disco do Windows."
+        echo "  A conversão precisa de vários GB de arquivos intermediários."
+        echo "  Libere espaço antes — apague o .tar e o .zip da imagem, que já"
+        echo "  não servem depois do 'docker load'."
+        echo "  Para seguir mesmo assim: IGNORAR_DISCO=1 bash $0"
+        [ "${IGNORAR_DISCO:-0}" = "1" ] || exit 1
+    fi
+fi
+
 if [ ! -f "$ONNX" ]; then
     erro "$ONNX não encontrado."
     echo "  Gere antes: python3 npu_compilation/export_onnx.py --model ${MODELO} --imgsz ${INPUT_SIZE}"
