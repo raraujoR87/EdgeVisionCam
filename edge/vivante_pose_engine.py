@@ -48,21 +48,66 @@ NUM_KEYPOINTS = 17  # esqueleto COCO
 EXTENSOES_NBG = ('.nb', '.nbg')
 
 
-class VivanteBoxes:
+class _NumpyArray(np.ndarray):
+    """ndarray com .cpu() e .numpy() transparentes.
+
+    vision_engine.py faz `res_pose[0].boxes.xyxy.cpu().numpy().astype(int)`.
+    Um ndarray puro já é numpy, mas não tem .cpu(). Esta subclasse adiciona os
+    dois métodos sem nenhum custo de cópia — o array subjacente é o mesmo."""
+
+    def __new__(cls, data, dtype=None, shape=None):
+        if data is None or (hasattr(data, '__len__') and len(data) == 0):
+            # Replace -1 dims with 0 for np.zeros (can't have negative dims)
+            if shape:
+                safe_shape = tuple(0 if d < 0 else d for d in shape)
+            else:
+                safe_shape = (0,)
+            arr = np.zeros(safe_shape, dtype=dtype or np.float32)
+        else:
+            arr = np.array(data, dtype=dtype)
+            if shape is not None:
+                try:
+                    arr = arr.reshape(shape)
+                except ValueError:
+                    pass
+        return arr.view(cls)
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return np.asarray(self)
+
+
+class _NumpyTensorCompat:
+    """Mixin que torna arrays NumPy transparentes para código que espera tensores PyTorch.
+
+    vision_engine.py chama `boxes.id.cpu().numpy()`, `keypoints.xy.cpu().numpy()`,
+    etc. Sem este mixin a NPU nunca registra detecções — o AttributeError no
+    `.cpu()` é engolido pelo try/except do loop e o frame passa em branco."""
+    def cpu(self):
+        return self
+    def numpy(self):
+        return self  # já é ndarray / container de ndarrays
+    def __float__(self):
+        return float(self)
+
+
+class VivanteBoxes(_NumpyTensorCompat):
     def __init__(self, xyxy, conf, cls, ids=None):
-        self.xyxy = np.array(xyxy, dtype=np.float32).reshape(-1, 4)
-        self.conf = np.array(conf, dtype=np.float32).reshape(-1)
-        self.cls = np.array(cls, dtype=np.int32).reshape(-1)
-        self.id = np.array(ids, dtype=np.int32).reshape(-1) if ids is not None else None
+        self.xyxy = _NumpyArray(xyxy, np.float32, (-1, 4))
+        self.conf = _NumpyArray(conf, np.float32, (-1,))
+        self.cls = _NumpyArray(cls, np.int32, (-1,))
+        self.id = _NumpyArray(ids, np.int32, (-1,)) if ids is not None else None
 
     def __len__(self):
         return len(self.xyxy)
 
 
-class VivanteKeypoints:
+class VivanteKeypoints(_NumpyTensorCompat):
     def __init__(self, xy, conf):
-        self.xy = np.array(xy, dtype=np.float32).reshape(-1, NUM_KEYPOINTS, 2)
-        self.conf = np.array(conf, dtype=np.float32).reshape(-1, NUM_KEYPOINTS)
+        self.xy = _NumpyArray(xy, np.float32, (-1, NUM_KEYPOINTS, 2))
+        self.conf = _NumpyArray(conf, np.float32, (-1, NUM_KEYPOINTS))
 
 
 class VivanteResult:
