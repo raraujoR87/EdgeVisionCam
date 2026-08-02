@@ -461,7 +461,7 @@ class Grafo:
         escala, zero_point, fixed = 1.0, 0, 0
         if quant.value == QUANT_TF_ASYMM:
             c_escala = ctypes.c_float()
-            c_zero = ctypes.c_uint32()
+            c_zero = ctypes.c_int32()
             consultar(self._rede, indice, PROP_TF_SCALE, ctypes.byref(c_escala))
             consultar(self._rede, indice, PROP_TF_ZERO_POINT, ctypes.byref(c_zero))
             escala, zero_point = c_escala.value, c_zero.value
@@ -595,15 +595,26 @@ class Grafo:
 
 def carregar_biblioteca():
     """
-    Abre libVIPhal.so e devolve o handle ctypes.
+    Abre libNBGlinker.so (ou libVIPhal.so) e devolve o handle ctypes.
 
     Separado de `Grafo` porque e util isoladamente: confirma que a biblioteca
     encontrada realmente carrega neste sistema — arquitetura, dependencias e
     versao do glibc — antes de qualquer tentativa de inferencia.
     """
-    caminho = localizar_bibliotecas().get("libVIPhal.so")
+    libs = localizar_bibliotecas()
+    
+    linker_caminho = libs.get("libNBGlinker.so")
+    if linker_caminho:
+        try:
+            # Em alguns SDKs (ex. Radxa a733), os simbolos vip_* publicos estao no linker.
+            # E necessario que LD_LIBRARY_PATH contenha a pasta para resolver libVIPhal.so
+            return ctypes.CDLL(linker_caminho)
+        except OSError as erro:
+            raise NpuIndisponivel(f"libNBGlinker.so encontrada mas nao carregavel: {erro}") from erro
+
+    caminho = libs.get("libVIPhal.so")
     if not caminho:
-        raise NpuIndisponivel("libVIPhal.so nao encontrada.")
+        raise NpuIndisponivel("Nenhuma biblioteca VIPLite (libNBGlinker/libVIPhal) encontrada.")
     try:
         return ctypes.CDLL(caminho)
     except OSError as erro:
