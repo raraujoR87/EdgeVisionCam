@@ -325,3 +325,22 @@ def test_tracker_descarta_faixa_antiga():
 def test_tracker_nao_reusa_id_em_cena_vazia():
     tracker = IoUTracker()
     assert tracker.update([]) == []
+
+
+# ── Dimensões unitárias vindas do VIPLite ──────────────────────────
+
+@pytest.mark.parametrize(
+    "forma",
+    [(1, 1, 57), (1, 57), (1, 3, 57), (1, 56, 2100), (2100, 56, 1)],
+)
+def test_dimensoes_unitarias_nao_colapsam_o_layout(forma):
+    """
+    O VIPLite às vezes põe o batch no fim: (2100, 56, 1). Um `np.squeeze`
+    genérico resolve esse caso e quebra outro — `(1, 1, 57)`, que é UMA pessoa
+    detectada, vira `(57,)` e o decodificador rejeita.
+
+    Num antifurto, o quadro com uma pessoa é justamente o que não pode falhar.
+    """
+    raw = np.zeros(forma, dtype=np.float32)
+    # Não deve levantar; o conteúdo zerado só não gera detecções.
+    decode_output(raw, conf_threshold=0.5)

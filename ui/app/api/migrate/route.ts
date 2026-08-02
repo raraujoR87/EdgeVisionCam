@@ -1,10 +1,18 @@
 import { NextResponse } from 'next/server';
 import { query } from '../db';
+import { autorizarMigracao } from '../migrations';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
+    // Esta rota altera o schema e reescreve papeis de usuario. Sem esta
+    // verificacao ela era publica — ver ui/app/api/migrations.ts.
+    const permissao = autorizarMigracao(request);
+    if (!permissao.autorizado) {
+      return NextResponse.json({ error: permissao.motivo }, { status: 401 });
+    }
+
     await query(`
       CREATE TABLE IF NOT EXISTS appliances (
           id SERIAL PRIMARY KEY,

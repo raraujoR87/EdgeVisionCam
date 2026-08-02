@@ -257,19 +257,54 @@ OPTIMIZE=VIP9000PICO_PID0XEE              bash npu_compilation/compilar_nbg.sh  
 (`canvas_rgb / 255.0`). Se divergirem, a quantização fica dimensionada para uma
 distribuição de entrada que nunca ocorre em produção.
 
-### Quantização
+### Quantização — leia antes de compilar
 
-O padrão é `pcq` — `perchannel_symmetric_affine` com `qtype int8`, uma escala
-por canal. Num detector isso pesa mais que no comum: as cabeças do YOLO
-(caixas, objectness, keypoints) têm faixas dinâmicas muito diferentes, e uma
-escala única por tensor achata as menores até sumirem. O sintoma é queda de
-recall, não erro.
+O padrão é `pcq` (`perchannel_symmetric_affine`, `qtype int8`).
+
+**Correção de uma afirmação anterior deste documento:** eu dizia que o `pcq`
+resolvia a diferença de faixa dinâmica entre as cabeças do YOLO. Não resolve.
+`pcq` dá uma escala por canal aos **pesos**; o **tensor de saída** continua
+quantizado por tensor, com uma escala só. E o problema está exatamente ali.
+
+A saída do YOLOv8-pose é uma linha concatenada:
+
+```
+[cx, cy, w, h,  conf,  kpt_x, kpt_y, kpt_conf, ...]
+ └── 0..320 ──┘ └0..1┘ └── 0..320 ──┘ └─ 0..1 ─┘
+```
+
+Uma escala única é dominada pelas coordenadas. Medido nesta placa: **1,57**.
+Com `int8`, o valor real é `q × 1,57`, então a confiança só consegue
+representar `0` ou `1,57` — tudo abaixo de 0,785 vira zero. O detector perde a
+confiança inteira, e o sintoma é "class scores zerados", não um erro.
+
+Ordem para atacar, do mais barato ao mais trabalhoso:
+
+```bash
+# 1. int16: escala cai para ~0,006 e a confiança ganha ~160 níveis.
+#    Um comando, sem mudar código. Mais lento que int8, ainda muito
+#    mais rápido que os 120-145 ms de CPU.
+QUANT=int16 bash npu_compilation/compilar_nbg.sh
+```
+
+**2. Separar as saídas no ONNX.** Exportar sem o `Concat` final, de modo que
+caixas, confiança e keypoints saiam como tensores distintos — cada um com sua
+própria escala. É a solução canônica para YOLO em NPU, e exige ajustar o
+decodificador para múltiplas saídas.
+
+**3. Quantização híbrida**, mantendo a camada de saída em `bf16`/`fp16`.
 
 ```bash
 QUANT=uint8 bash npu_compilation/compilar_nbg.sh   # asymmetric_affine
-QUANT=int16 bash npu_compilation/compilar_nbg.sh   # mais preciso, mais lento
 QUANT=bf16  bash npu_compilation/compilar_nbg.sh   # sem quantização real
 ```
+
+Não tente compensar isso no decodificador. Já foi tentado — usar a confiança
+máxima dos keypoints no lugar da confiança da caixa — e o resultado foi
+**excesso de falsos positivos em quadros vazios**. Num antifurto isso é pior
+que não detectar: alarme sem ninguém na cena destrói a confiança do operador
+no sistema. A informação foi perdida na quantização; nenhum pós-processamento
+a recupera.
 
 ## Passo 4 — validar na placa
 

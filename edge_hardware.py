@@ -66,7 +66,7 @@ PERFIS_DE_MEMORIA = [
     }),
 ]
 
-ARQUIVO_OVERRIDE = "docker-compose.override.yml"
+ARQUIVO_OVERRIDE = "docker-compose.hardware.yml"
 
 
 def devices_presentes(raiz="/"):
@@ -113,48 +113,25 @@ def escolher_perfil(total_mb):
 
 def montar_override(devices, limites):
     """
-    Formata o YAML do override à mão.
-    Não usar PyYAML poupa uma dependência de sistema na fase de bootstrap.
+    YAML do override, ou string vazia quando o hardware casa com o base.
+
+    Devolver vazio importa: um arquivo de override sem conteúdo útil só
+    confunde quem for depurar o appliance depois.
     """
-    frigate_devices = []
-    core_devices = []
-    core_volumes = []
-
-    if devices:
-        for caminho, descricao in devices:
-            if caminho == "/dev/dri":
-                frigate_devices.append(f"      - {caminho}:{caminho}   # {descricao}")
-            elif caminho == NPU_DEVICE:
-                core_devices.append(f"      - {caminho}:{caminho}   # {descricao}")
-                # Quando a NPU está presente, precisa também das libs VIPLite do host
-                core_volumes.append(f"      - /usr/local/lib/viplite:/usr/local/lib/viplite:ro")
-
-    blocos = []
-    
     frigate = []
-    if frigate_devices:
-        frigate.append("    devices:\n" + "\n".join(frigate_devices))
+    if devices:
+        frigate.append("    devices:")
+        for caminho, descricao in devices:
+            frigate.append(f"      - {caminho}:{caminho}   # {descricao}")
     if "frigate" in limites:
         frigate.append(f"    mem_limit: {limites['frigate']}")
+
+    blocos = []
     if frigate:
         blocos.append("  frigate:\n" + "\n".join(frigate))
-
-    core = []
-    if core_devices:
-        core.append("    devices:\n" + "\n".join(core_devices))
-    if core_volumes:
-        core.append("    volumes:\n" + "\n".join(core_volumes))
-        core.append("    environment:\n      - VIPLITE_LIB_DIR=/usr/local/lib/viplite\n      - LD_LIBRARY_PATH=/usr/local/lib/viplite")
-    if "visioncam-core" in limites:
-        core.append(f"    mem_limit: {limites['visioncam-core']}")
-    if core:
-        blocos.append("  visioncam-core:\n" + "\n".join(core))
-
-    ui = []
-    if "visioncam-ui" in limites:
-        ui.append(f"    mem_limit: {limites['visioncam-ui']}")
-    if ui:
-        blocos.append("  visioncam-ui:\n" + "\n".join(ui))
+    for servico in ("visioncam-core", "visioncam-ui"):
+        if servico in limites:
+            blocos.append(f"  {servico}:\n    mem_limit: {limites[servico]}")
 
     if not blocos:
         return ""
@@ -195,6 +172,7 @@ def aplicar(destino=ARQUIVO_OVERRIDE, raiz="/", meminfo="/proc/meminfo"):
     ]
 
     return {
+        "devices": [d[0] for d in devices],
         "ausentes": ausentes,
         "memoria_mb": total_mb,
         "perfil": perfil,

@@ -158,6 +158,17 @@ fi
 
 if [ -n "$IMAGEM" ] && docker image inspect "$IMAGEM" >/dev/null 2>&1; then
     ok "$IMAGEM já carregada"
+    # Com a imagem dentro do Docker, o .tar e o .zip so ocupam espaco — e o
+    # espaco e justamente o que costuma faltar nesta etapa.
+    SOBRAS=$(find "$HOME" -maxdepth 3 \( -name 'ubuntu-npu_*.tar' -o -name 'ubuntu-npu_*.tar.zip' \
+             -o -name 'docker_images_v2.0.x*.zip*' \) -size +1G 2>/dev/null)
+    if [ -n "$SOBRAS" ]; then
+        aviso "Arquivos de instalação ainda ocupando disco (já não são necessários):"
+        echo "$SOBRAS" | while read -r arquivo; do
+            printf "      %s  (%s)\n" "$arquivo" "$(du -h "$arquivo" 2>/dev/null | cut -f1)"
+        done
+        aviso "Apague-os: a imagem já está carregada no Docker."
+    fi
     echo "  Verificando o pegasus dentro dela..."
     if docker run --rm "$IMAGEM" bash -c 'ls /root/acuity-toolkit*/bin/pegasus* 2>/dev/null' | head -3 | sed 's/^/    /'; then
         ok "ACUITY presente."

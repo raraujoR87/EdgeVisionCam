@@ -15,6 +15,12 @@
 # Roda dentro do container visioncam-core, que já tem OpenCV e enxerga o banco
 # e os clipes. Instalar OpenCV no host da placa só para isso seria desperdício.
 #
+# O repositório NÃO está montado no container — o compose monta apenas o banco,
+# storage/events e o frigate_config.yml. Por isso o script é copiado para dentro
+# (sobrepondo a cópia embutida na imagem, que costuma ser de outra versão) e as
+# imagens são copiadas de volta. Sem isso a coleta funciona e o resultado fica
+# preso no filesystem do container.
+#
 # Uso:  bash npu_compilation/coletar_calibracao.sh
 #       QUANTIDADE=150 bash npu_compilation/coletar_calibracao.sh
 # ==============================================================================
@@ -46,8 +52,19 @@ titulo "Coletando $QUANTIDADE imagens da cena real"
 echo "  Ordem de preferência: câmera ao vivo → clipes de evento → COCO."
 echo
 
-# O repositório é montado no container em /app, então o script já está lá.
-docker exec "$CONTAINER" python3 /app/npu_compilation/prepare_calibration.py \
+# Tem de ir para /app/npu_compilation/, não /tmp: o script deduz a raiz do
+# projeto a partir do próprio caminho para achar o system.db. Fora do lugar ele
+# não encontra a câmera e cai direto no COCO, sem que isso pareça um erro.
+REMOTO=/app/npu_compilation
+docker exec "$CONTAINER" mkdir -p "$REMOTO"
+docker exec "$CONTAINER" rm -rf "$REMOTO/calibration_images"
+if ! docker cp npu_compilation/prepare_calibration.py \
+        "$CONTAINER:$REMOTO/prepare_calibration.py"; then
+    erro "Não foi possível copiar o script para o container."
+    exit 1
+fi
+
+docker exec "$CONTAINER" python3 "$REMOTO/prepare_calibration.py" \
     --quantidade "$QUANTIDADE" 2>&1 | sed 's/^/    /'
 RESULTADO=${PIPESTATUS[0]}
 
@@ -56,12 +73,19 @@ if [ "$RESULTADO" -ne 0 ]; then
     exit 1
 fi
 
+titulo "Trazendo as imagens para o host"
+mkdir -p npu_compilation
+rm -rf "$DESTINO"
+if ! docker cp "$CONTAINER:$REMOTO/calibration_images" "$DESTINO"; then
+    erro "Não foi possível copiar as imagens de volta."
+    echo "  Veja o que ficou no container:"
+    echo "    docker exec $CONTAINER ls -la $REMOTO/calibration_images"
+    exit 1
+fi
+
 titulo "Resultado"
 if [ ! -d "$DESTINO" ]; then
     erro "$DESTINO não foi criado."
-    echo "  O container escreve em /app/npu_compilation/calibration_images."
-    echo "  Confirme que o repositório está montado em /app:"
-    echo "    docker inspect $CONTAINER --format '{{json .Mounts}}'"
     exit 1
 fi
 
