@@ -8,6 +8,7 @@ import {
   ipDaRequisicao,
   dentroDoLimite,
 } from '../tenant';
+import { ehSuperAdmin, STORE_ADMIN } from '../papeis';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,10 +39,7 @@ function extrairSessao(request: Request): TokenPayload | null {
   }
 }
 
-/** Papéis com poder administrativo global. */
-function ehSuperAdmin(role: string): boolean {
-  return ['admin', 'SUPER_ADMIN'].includes(role);
-}
+
 
 function semSessao() {
   return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 });
@@ -105,7 +103,7 @@ export async function POST(request: Request) {
   if (!sessao) return semSessao();
 
   const superAdmin = ehSuperAdmin(sessao.role);
-  if (!superAdmin && sessao.role !== 'STORE_ADMIN') {
+  if (!superAdmin && sessao.role !== STORE_ADMIN) {
     return NextResponse.json(
       { error: 'Apenas administradores podem criar lojas.' },
       { status: 403 },
@@ -196,7 +194,7 @@ export async function PUT(request: Request) {
   const sessao = extrairSessao(request);
   if (!sessao) return semSessao();
 
-  if (!ehSuperAdmin(sessao.role) && sessao.role !== 'STORE_ADMIN') {
+  if (!ehSuperAdmin(sessao.role) && sessao.role !== STORE_ADMIN) {
     return NextResponse.json(
       { error: 'Apenas administradores podem editar lojas.' },
       { status: 403 },

@@ -1,66 +1,112 @@
 import { NextResponse } from 'next/server';
-import { query } from '../db';
-import { verifyToken } from '../auth/tokens';
+import { verifyToken, TokenPayload } from '../auth/tokens';
+import { comInquilino, contextoDoToken } from '../tenant';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET(request: Request) {
+/**
+ * Indicadores para o painel de BI.
+ *
+ * A versão anterior tinha um vazamento entre inquilinos:
+ *
+ *     const store_id = searchParams.get('store_id') || payload.store_id;
+ *
+ * O id vinha da query string sem nenhuma verificação de posse. Qualquer usuário
+ * autenticado — inclusive um VIEWER de outro cliente — lia os indicadores de
+ * qualquer loja passando `?store_id=`. Não era preciso forjar token nem
+ * adivinhar credencial: bastava trocar um número na URL.
+ *
+ * Agora o filtro é apenas um recorte de exibição; quem decide o que é acessível
+ * é a RLS. Pedir uma loja alheia devolve zero linhas em vez de dados.
+ */
+
+function extrairSessao(request: Request): TokenPayload | null {
+  const header = request.headers.get('Authorization') || '';
+  if (!header.startsWith('Bearer ')) return null;
   try {
-    const authHeader = request.headers.get('Authorization') || '';
-    if (!authHeader.startsWith('Bearer ')) {
-      return NextResponse.json({ error: 'Token ausente' }, { status: 401 });
-    }
-    const payload = verifyToken(authHeader.slice(7).trim());
-    if (!payload) {
-      return NextResponse.json({ error: 'Token inválido' }, { status: 401 });
-    }
+    return verifyToken(header.slice(7).trim());
+  } catch {
+    console.error('[analytics] Não foi possível validar o token.');
+    return null;
+  }
+}
 
-    const { searchParams } = new URL(request.url);
-    const store_id = searchParams.get('store_id') || payload.store_id;
+export async function GET(request: Request) {
+  const sessao = extrairSessao(request);
+  if (!sessao) {
+    return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 });
+  }
 
-    if (!store_id && !['admin', 'SUPER_ADMIN'].includes(payload.role)) {
-      return NextResponse.json({ error: 'Acesso negado' }, { status: 403 });
-    }
+  const { searchParams } = new URL(request.url);
+  const lojaPedida = searchParams.get('store_id');
+  const orgPedida = searchParams.get('organization_id');
 
-    // 1. Resumo Diário de Eventos (Últimos 7 dias)
-    const dailyEventsRes = await query(`
-      SELECT 
-        DATE(analyzed_at) as date,
-        COUNT(*) as total,
-        SUM(CASE WHEN verdict = 'SUSPICIOUS' THEN 1 ELSE 0 END) as suspicious,
-        SUM(CASE WHEN verdict = 'CLEAR' THEN 1 ELSE 0 END) as clear
-      FROM events
-      WHERE store_id = $1 AND analyzed_at >= NOW() - INTERVAL '7 days'
-      GROUP BY DATE(analyzed_at)
-      ORDER BY DATE(analyzed_at) ASC
-    `, [store_id]);
+  try {
+    const dados = await comInquilino(contextoDoToken(sessao), async (cliente) => {
+      // Filtro nulo significa "tudo que eu posso ver" — e a RLS define o que é
+      // isso. Sem contexto declarado o conjunto é vazio, não completo.
+      const evento = lojaPedida
+        ? { clausula: 'AND e.store_id = $1', params: [lojaPedida] }
+        : orgPedida
+          ? {
+              clausula: 'AND e.store_id IN (SELECT id FROM stores WHERE organization_id = $1)',
+              params: [orgPedida],
+            }
+          : { clausula: '', params: [] as any[] };
 
-    // 2. Taxa de Falsos Positivos (Feedback Humano)
-    const feedbackRes = await query(`
-      SELECT 
-        SUM(CASE WHEN human_feedback = 'TRUE_POSITIVE' THEN 1 ELSE 0 END) as true_positives,
-        SUM(CASE WHEN human_feedback = 'FALSE_POSITIVE' THEN 1 ELSE 0 END) as false_positives,
-        COUNT(*) as total_feedback
-      FROM events
-      WHERE store_id = $1 AND human_feedback IS NOT NULL
-    `, [store_id]);
+      const diario = await cliente.query(
+        `SELECT DATE(e.analyzed_at) AS date,
+                COUNT(*)::int AS total,
+                SUM(CASE WHEN e.verdict = 'SUSPICIOUS' THEN 1 ELSE 0 END)::int AS suspicious,
+                SUM(CASE WHEN e.verdict = 'CLEAR' THEN 1 ELSE 0 END)::int AS clear
+           FROM events e
+          WHERE e.analyzed_at >= NOW() - INTERVAL '7 days' ${evento.clausula}
+          GROUP BY DATE(e.analyzed_at)
+          ORDER BY DATE(e.analyzed_at) ASC`,
+        evento.params,
+      );
 
-    // 3. Status da Frota
-    const fleetRes = await query(`
-      SELECT 
-        COUNT(a.id) as total_appliances,
-        SUM(CASE WHEN h.last_seen >= NOW() - INTERVAL '5 minutes' THEN 1 ELSE 0 END) as online
-      FROM appliances a
-      LEFT JOIN hardware_status h ON a.id = h.appliance_id
-      WHERE a.store_id = $1
-    `, [store_id]);
+      // Os dois erros ficam separados de propósito. Num antifurto eles têm
+      // custo muito diferente: deixar passar um furto custa mercadoria, acusar
+      // um inocente custa o cliente. Uma "taxa de acerto" única esconderia isso.
+      const feedback = await cliente.query(
+        `SELECT SUM(CASE WHEN e.human_feedback = 'TRUE_POSITIVE'  THEN 1 ELSE 0 END)::int AS true_positives,
+                SUM(CASE WHEN e.human_feedback = 'FALSE_POSITIVE' THEN 1 ELSE 0 END)::int AS false_positives,
+                COUNT(*)::int AS total_feedback
+           FROM events e
+          WHERE e.human_feedback IS NOT NULL ${evento.clausula}`,
+        evento.params,
+      );
 
-    return NextResponse.json({
-      daily: dailyEventsRes.rows,
-      feedback: feedbackRes.rows[0],
-      fleet: fleetRes.rows[0]
+      const frota = lojaPedida
+        ? { clausula: 'WHERE a.store_id = $1', params: [lojaPedida] }
+        : orgPedida
+          ? {
+              clausula: 'WHERE a.store_id IN (SELECT id FROM stores WHERE organization_id = $1)',
+              params: [orgPedida],
+            }
+          : { clausula: '', params: [] as any[] };
+
+      const fleet = await cliente.query(
+        `SELECT COUNT(a.id)::int AS total_appliances,
+                SUM(CASE WHEN h.last_seen >= NOW() - INTERVAL '5 minutes' THEN 1 ELSE 0 END)::int AS online,
+                -- "Online sem inferência" é o estado que passa despercebido: o
+                -- appliance responde, mas a engine parou. Contá-lo à parte é o
+                -- que distingue "no ar" de "funcionando".
+                SUM(CASE WHEN h.last_seen >= NOW() - INTERVAL '5 minutes'
+                          AND COALESCE(h.inference_ms, 0) > 0 THEN 1 ELSE 0 END)::int AS detectando
+           FROM appliances a
+           LEFT JOIN hardware_status h ON a.id = h.appliance_id
+           ${frota.clausula}`,
+        frota.params,
+      );
+
+      return { daily: diario.rows, feedback: feedback.rows[0], fleet: fleet.rows[0] };
     });
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+
+    return NextResponse.json(dados);
+  } catch (erro: any) {
+    console.error('[analytics GET]', erro);
+    return NextResponse.json({ error: 'Falha ao calcular indicadores.' }, { status: 500 });
   }
 }

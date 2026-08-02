@@ -2,6 +2,13 @@ import { NextResponse } from 'next/server';
 import { query, isDatabaseNotConfigured } from '../db';
 import { verifyToken } from '../auth/tokens';
 import { gerarCodigo } from './codigo';
+import {
+  comInquilino,
+  contextoDoToken,
+  registrarAuditoria,
+  ipDaRequisicao,
+} from '../tenant';
+import { ehSuperAdmin } from '../papeis';
 
 /**
  * Gerência dos códigos de provisionamento — consumida pelo console de nuvem.
@@ -12,19 +19,32 @@ import { gerarCodigo } from './codigo';
  */
 export const dynamic = 'force-dynamic';
 
+/**
+ * Sessao de administrador, ou null.
+ *
+ * Devolve o payload em vez de um booleano: as rotas precisam do id e do e-mail
+ * para registrar na auditoria quem emitiu ou revogou o codigo. Sem isso, a
+ * trilha diria "um codigo foi revogado" sem dizer por quem.
+ */
 async function exigirAdmin(request: Request) {
   const header = request.headers.get('Authorization') || '';
   if (!header.startsWith('Bearer ')) return null;
-
-  const payload = verifyToken(header.slice(7).trim());
-  if (!payload || !['admin', 'SUPER_ADMIN'].includes(payload.role)) return null;
+  let payload;
+  try {
+    payload = verifyToken(header.slice(7).trim());
+  } catch {
+    console.error('[provisioning] Nao foi possivel validar o token.');
+    return null;
+  }
+  if (!payload || !ehSuperAdmin(payload.role)) return null;
   return payload;
 }
 
 /** Lista os appliances e seu estado de provisionamento. */
 export async function GET(request: Request) {
   try {
-    if (!(await exigirAdmin(request))) {
+    const sessao = await exigirAdmin(request);
+    if (!sessao) {
       return NextResponse.json({ error: 'Acesso restrito a administradores.' }, { status: 401 });
     }
 
@@ -56,7 +76,8 @@ export async function GET(request: Request) {
 /** Emite um novo código para uma loja. */
 export async function POST(request: Request) {
   try {
-    if (!(await exigirAdmin(request))) {
+    const sessao = await exigirAdmin(request);
+    if (!sessao) {
       return NextResponse.json({ error: 'Acesso restrito a administradores.' }, { status: 401 });
     }
 
@@ -96,6 +117,28 @@ export async function POST(request: Request) {
       [store_id, codigo, label || null, target_version || 'latest', edge_key || null]
     );
 
+    // Emitir um codigo cria uma credencial que provisiona um appliance na loja.
+    // Sem registro, "quem autorizou este dispositivo?" fica sem resposta.
+    try {
+      await comInquilino(contextoDoToken(sessao), async (cliente: any) => {
+        const org = await cliente.query('SELECT organization_id FROM stores WHERE id = $1', [store_id]);
+        await registrarAuditoria(cliente, {
+          organizationId: org.rows[0]?.organization_id ?? null,
+          userId: sessao.id,
+          actorEmail: sessao.email,
+          action: 'provisioning.issue',
+          resourceType: 'store',
+          resourceId: store_id,
+          detail: { label: label || null, target_version: target_version || 'latest' },
+          ipAddress: ipDaRequisicao(request),
+        });
+      });
+    } catch (erroAuditoria) {
+      // A auditoria nao pode derrubar a emissao: o codigo ja existe no banco, e
+      // falhar aqui deixaria o tecnico sem codigo por um problema de log.
+      console.error('[provisioning] Falha ao auditar emissao:', erroAuditoria);
+    }
+
     return NextResponse.json({ status: 'success', appliance: res.rows[0] });
   } catch (erro: any) {
     if (isDatabaseNotConfigured(erro)) {
@@ -109,7 +152,8 @@ export async function POST(request: Request) {
 /** Revoga um código ou desativa um appliance. */
 export async function DELETE(request: Request) {
   try {
-    if (!(await exigirAdmin(request))) {
+    const sessao = await exigirAdmin(request);
+    if (!sessao) {
       return NextResponse.json({ error: 'Acesso restrito a administradores.' }, { status: 401 });
     }
 

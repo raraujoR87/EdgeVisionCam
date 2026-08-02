@@ -7,6 +7,12 @@ import {
   registrarAuditoria,
   ipDaRequisicao,
 } from '../tenant';
+import {
+  ehSuperAdmin,
+  papelDeOrganizacaoValido,
+  PAPEIS_DE_ORGANIZACAO,
+  STORE_ADMIN,
+} from '../papeis';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +29,7 @@ export const dynamic = 'force-dynamic';
  * intervalo entre a migração e o deploy.
  */
 
-const PAPEIS_VALIDOS = ['STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER'];
+
 
 function extrairSessao(request: Request): TokenPayload | null {
   const header = request.headers.get('Authorization') || '';
@@ -36,9 +42,7 @@ function extrairSessao(request: Request): TokenPayload | null {
   }
 }
 
-function ehSuperAdmin(role: string): boolean {
-  return ['admin', 'SUPER_ADMIN'].includes(role);
-}
+
 
 async function orgsQueAdministra(cliente: any, userId: number | string): Promise<number[]> {
   const res = await cliente.query(
@@ -64,7 +68,7 @@ export async function GET(request: Request) {
   }
 
   const superAdmin = ehSuperAdmin(sessao.role);
-  if (!superAdmin && sessao.role !== 'STORE_ADMIN') {
+  if (!superAdmin && sessao.role !== STORE_ADMIN) {
     return NextResponse.json({ error: 'Acesso negado.' }, { status: 403 });
   }
 
@@ -129,7 +133,7 @@ export async function POST(request: Request) {
   }
 
   const superAdmin = ehSuperAdmin(sessao.role);
-  if (!superAdmin && sessao.role !== 'STORE_ADMIN') {
+  if (!superAdmin && sessao.role !== STORE_ADMIN) {
     return NextResponse.json({ error: 'Acesso negado.' }, { status: 403 });
   }
 
@@ -150,9 +154,9 @@ export async function POST(request: Request) {
 
   // A lista é fechada: aceitar um papel arbitrário deixaria o valor cair na
   // coluna e ser interpretado por qualquer checagem futura que use string solta.
-  if (!PAPEIS_VALIDOS.includes(role)) {
+  if (!papelDeOrganizacaoValido(role)) {
     return NextResponse.json(
-      { error: `role inválido. Aceitos: ${PAPEIS_VALIDOS.join(', ')}.` },
+      { error: `role inválido. Aceitos: ${PAPEIS_DE_ORGANIZACAO.join(', ')}.` },
       { status: 400 },
     );
   }
@@ -253,7 +257,7 @@ export async function DELETE(request: Request) {
   }
 
   const superAdmin = ehSuperAdmin(sessao.role);
-  if (!superAdmin && sessao.role !== 'STORE_ADMIN') {
+  if (!superAdmin && sessao.role !== STORE_ADMIN) {
     return NextResponse.json({ error: 'Acesso negado.' }, { status: 403 });
   }
 

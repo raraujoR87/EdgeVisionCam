@@ -20,7 +20,7 @@ API = os.path.join(RAIZ, "ui", "app", "api")
 # Rotas que servem dado pertencente a cliente e são acessadas por sessão de
 # usuário. Ingestão (telemetry/webhook) e provisionamento usam outra credencial
 # e estão fora deste conjunto de propósito.
-ROTAS_DE_INQUILINO = ["stores/route.ts", "users/route.ts"]
+ROTAS_DE_INQUILINO = ["stores/route.ts", "users/route.ts", "analytics/route.ts"]
 
 
 def _ler(caminho):
@@ -151,11 +151,12 @@ def test_papel_vem_de_lista_fechada():
     qualquer checagem futura que compare string solta.
     """
     conteudo = _ler("users/route.ts")
-    assert "PAPEIS_VALIDOS" in conteudo
-    assert "PAPEIS_VALIDOS.includes(role)" in conteudo
-    # STORE_ADMIN não pode criar SUPER_ADMIN por este caminho.
-    assert "'SUPER_ADMIN'" not in re.search(
-        r"const PAPEIS_VALIDOS = \[[^\]]*\]", conteudo).group(0)
+    assert "papelDeOrganizacaoValido(role)" in conteudo
+
+    papeis = _ler("papeis.ts")
+    lista = re.search(r"PAPEIS_DE_ORGANIZACAO = \[[\s\S]*?\]", papeis).group(0)
+    # SUPER_ADMIN não é atribuível por convite: seria escalada de privilégio.
+    assert "SUPER_ADMIN," not in lista
 
 
 def test_organizacao_nao_fica_sem_administrador():
@@ -182,3 +183,52 @@ def test_store_admin_nao_convida_para_organizacao_alheia():
     corpo = re.search(r"export async function POST[\s\S]*?(?=\nexport async function )", conteudo).group(0)
     assert "Organização fora do seu escopo" in corpo
     assert "minhas.includes(orgId)" in corpo
+
+
+# ── Vazamento por parâmetro de URL ─────────────────────────────────
+
+def test_analytics_nao_aceita_loja_pela_query_string():
+    """
+    A versão anterior fazia:
+
+        const store_id = searchParams.get('store_id') || payload.store_id;
+
+    O id vinha da URL sem verificação de posse. Qualquer autenticado lia os
+    indicadores de qualquer loja trocando um número — sem forjar token nem
+    adivinhar credencial.
+    """
+    conteudo = _ler("analytics/route.ts")
+    # Só linhas de código: o comentário que documenta o defeito precisa citá-lo.
+    codigo = "\n".join(
+        l for l in conteudo.splitlines()
+        if not l.lstrip().startswith(("*", "//", "/*"))
+    )
+    assert not re.search(r"searchParams\.get\('store_id'\)\s*\|\|", codigo), \
+        "o store_id da URL ainda cai direto no filtro"
+    assert "comInquilino" in codigo
+
+
+def test_papel_legado_esta_num_lugar_so():
+    """
+    A checagem ['admin','SUPER_ADMIN'] replicada em cinco arquivos é como um
+    caminho fica mais permissivo que os outros: basta alguém corrigir quatro.
+    """
+    literais = 0
+    for pasta, _, arquivos in os.walk(API):
+        for arquivo in arquivos:
+            if not arquivo.endswith(".ts") or arquivo == "papeis.ts":
+                continue
+            with open(os.path.join(pasta, arquivo), encoding="utf-8") as f:
+                if re.search(r"\['admin',\s*'SUPER_ADMIN'\]", f.read()):
+                    literais += 1
+    assert literais == 0, f"{literais} arquivo(s) repetem a checagem em vez de usar papeis.ts"
+
+
+def test_auditoria_nao_derruba_a_operacao():
+    """
+    O código de provisionamento já existe no banco quando a auditoria roda.
+    Falhar ali deixaria o técnico sem código por um problema de log.
+    """
+    conteudo = _ler("provisioning/route.ts")
+    assert "Falha ao auditar emissao" in conteudo
+    assert re.search(r"catch \(erroAuditoria\)", conteudo)

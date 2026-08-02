@@ -1,4 +1,5 @@
 import { verifyToken } from './auth/tokens';
+import { ehSuperAdmin } from './papeis';
 
 /**
  * Controle de acesso das rotas de migração de schema.
@@ -51,7 +52,7 @@ export function autorizarMigracao(request: Request): ResultadoAutorizacao {
   if (cabecalho.startsWith('Bearer ')) {
     try {
       const payload = verifyToken(cabecalho.slice(7).trim());
-      if (payload && ['admin', 'SUPER_ADMIN'].includes(payload.role)) {
+      if (payload && ehSuperAdmin(payload.role)) {
         return { autorizado: true, motivo: 'Token de SUPER_ADMIN.', via: 'token' };
       }
       return {
