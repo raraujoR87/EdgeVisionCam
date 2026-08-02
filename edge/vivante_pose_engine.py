@@ -243,9 +243,18 @@ def decode_anchors(raw, conf_threshold, iou_threshold=0.45):
 def decode_output(raw, conf_threshold, iou_threshold=0.45):
     """Escolhe o decodificador pelo formato do tensor."""
     arr = np.asarray(raw, dtype=np.float32)
-    
-    # VIPLite often puts the batch dimension at the end: (2100, 56, 1)
-    arr = np.squeeze(arr)
+
+    # O VIPLite as vezes poe a dimensao de batch no fim: (2100, 56, 1).
+    #
+    # `np.squeeze` sozinho remove TODA dimensao unitaria, e isso quebra o caso
+    # mais comum de todos: uma unica pessoa no quadro. `(1, 1, 57)` viraria
+    # `(57,)`, que cai no ValueError abaixo — e num antifurto o quadro com uma
+    # pessoa e justamente o que nao pode falhar. Removemos apenas as unitarias
+    # das pontas, parando quando restam duas dimensoes.
+    while arr.ndim > 2 and arr.shape[0] == 1:
+        arr = arr[0]
+    while arr.ndim > 2 and arr.shape[-1] == 1:
+        arr = arr[..., 0]
     if arr.ndim == 3:
         arr = arr[0]
 
