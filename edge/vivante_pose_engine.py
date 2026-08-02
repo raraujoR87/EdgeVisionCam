@@ -216,11 +216,7 @@ def decode_anchors(raw, conf_threshold, iou_threshold=0.45):
     
     # YOLOv8 ONNX exports already have sigmoid applied to the confidence scores!
     # Due to int8 quantization scale (1.57), 0.0 stays 0.0, and 1.0 becomes 1.57.
-    # WORKAROUND NPU BUG: Col 4 (class conf) is completely zeroed out by VIPLite compiler.
-    # We use the max keypoint confidence as the bounding box confidence.
-    kpts_all = pred[:, 5:5 + NUM_KEYPOINTS * 3].reshape(-1, NUM_KEYPOINTS, 3)
-    kpts_conf_all = kpts_all[..., 2]
-    scores = np.max(kpts_conf_all, axis=1)
+    scores = pred[:, 4]
     
     mask = scores >= conf_threshold
     pred, scores = pred[mask], scores[mask]
