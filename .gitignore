@@ -64,3 +64,4 @@ Thumbs.db
 docker-compose.hardware.yml
 docker-compose.mgmt.yml
 
+visioncam-ui-patched.tar

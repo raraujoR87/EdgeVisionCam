@@ -1,7 +1,7 @@
 "use client"
 import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server } from 'lucide-react'
+import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server, Store, HardDrive } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { getApiUrl } from './utils/api'
 
@@ -128,6 +128,14 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               <Link href="/dashboard" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <LayoutDashboard size={20} />
                 <span className="font-medium">Dashboard Central</span>
+              </Link>
+              <Link href="/dashboard/stores" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/stores' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <Store size={20} />
+                <span className="font-medium">Gerenciar Lojas</span>
+              </Link>
+              <Link href="/dashboard/appliances" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/appliances' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <HardDrive size={20} />
+                <span className="font-medium">Dispositivos (Edge)</span>
               </Link>
               <Link href="/dashboard/events" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/events' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Shield size={20} />
