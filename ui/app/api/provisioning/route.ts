@@ -17,7 +17,7 @@ async function exigirAdmin(request: Request) {
   if (!header.startsWith('Bearer ')) return null;
 
   const payload = verifyToken(header.slice(7).trim());
-  if (!payload || payload.role !== 'admin') return null;
+  if (!payload || !['admin', 'SUPER_ADMIN'].includes(payload.role)) return null;
   return payload;
 }
 
@@ -130,11 +130,8 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'Appliance não encontrado.' }, { status: 404 });
     }
 
-    await query(
-      `INSERT INTO deploy_events (appliance_id, store_id, event_type, detail)
-       VALUES ($1, $2, 'REVOGADO', 'Revogado pelo console')`,
-      [res.rows[0].id, res.rows[0].store_id]
-    );
+    // Log de revogação (inline, sem tabela separada)
+    console.log(`[Provisioning] Appliance ${res.rows[0].id} revogado (loja ${res.rows[0].store_id})`);
 
     // Revogar impede novo resgate, mas não desinstala nada: um appliance já
     // provisionado segue rodando com a chave que recebeu. Para cortar o acesso

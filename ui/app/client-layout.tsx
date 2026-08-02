@@ -126,19 +126,19 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
             <>
               <Link href="/dashboard" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <LayoutDashboard size={20} />
-                <span className="font-medium">Painel Administrativo</span>
+                <span className="font-medium">Painel Central</span>
               </Link>
               <Link href="/dashboard/stores" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/stores' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Store size={20} />
                 <span className="font-medium">Lojas & Clientes</span>
               </Link>
-              <Link href="/dashboard/appliances" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/appliances' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <HardDrive size={20} />
-                <span className="font-medium">Dispositivos Edge</span>
-              </Link>
               <Link href="/dashboard/deploys" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/deploys' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Server size={20} />
                 <span className="font-medium">Frota & Deploys</span>
+              </Link>
+              <Link href="/dashboard/events" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/events' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <Shield size={20} />
+                <span className="font-medium">Eventos</span>
               </Link>
             </>
           ) : user && ['STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER', 'client'].includes(user.role) && isCloudMode ? (

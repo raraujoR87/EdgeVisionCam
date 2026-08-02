@@ -13,6 +13,12 @@ export async function GET(request: Request) {
       ADD COLUMN IF NOT EXISTS timezone VARCHAR(50) DEFAULT 'America/Sao_Paulo';
     `);
 
+    // 1.5. Add inference_ms to hardware_status (used by fleet health checks)
+    await query(`
+      ALTER TABLE hardware_status
+      ADD COLUMN IF NOT EXISTS inference_ms NUMERIC(8,2);
+    `);
+
     // 2. Change roles of existing users
     // If a user was 'admin', they become 'SUPER_ADMIN' if they have no store, else 'STORE_ADMIN'.
     // If a user was 'client', they become 'STORE_VIEWER'.

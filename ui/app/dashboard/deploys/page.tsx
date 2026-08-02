@@ -133,7 +133,7 @@ export default function GerenciarDeploys() {
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-blue-500"
             >
               <option value="">Selecione…</option>
-              {(lojas?.stores || []).map((l: any) => (
+              {(Array.isArray(lojas) ? lojas : []).map((l: any) => (
                 <option key={l.id} value={l.id}>{l.name}</option>
               ))}
             </select>

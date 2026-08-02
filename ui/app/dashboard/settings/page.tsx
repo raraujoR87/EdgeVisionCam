@@ -24,8 +24,10 @@ export default function SettingsPage() {
   useEffect(() => {
     const token = localStorage.getItem('admin_token');
     if (token) {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      setSession(payload);
+      fetch('/api/auth/verify', { headers: { 'Authorization': `Bearer ${token}` } })
+        .then(res => res.json())
+        .then(data => { if (data.user) setSession(data.user); })
+        .catch(() => {});
     }
   }, []);
 

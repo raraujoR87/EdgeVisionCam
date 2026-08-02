@@ -18,7 +18,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const store_id = searchParams.get('store_id') || payload.store_id;
 
-    if (!store_id && payload.role !== 'SUPER_ADMIN') {
+    if (!store_id && !['admin', 'SUPER_ADMIN'].includes(payload.role)) {
       return NextResponse.json({ error: 'Acesso negado' }, { status: 403 });
     }
 
