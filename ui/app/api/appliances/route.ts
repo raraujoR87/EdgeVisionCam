@@ -35,9 +35,9 @@ export async function POST(request: Request) {
     const provisioning_code = Math.random().toString(36).substring(2, 8).toUpperCase();
 
     const result = await query(
-      \INSERT INTO appliances (store_id, label, target_version, edge_key, provisioning_code, status)
-       VALUES (\, \, \, \, \, 'PENDING')
-       RETURNING *\,
+      `INSERT INTO appliances (store_id, label, target_version, edge_key, provisioning_code, status)
+       VALUES ($1, $2, $3, $4, $5, 'PENDING')
+       RETURNING *`,
       [store_id, label || 'Novo Dispositivo', target_version || 'latest', edge_key, provisioning_code]
     );
 

@@ -25,9 +25,9 @@ export async function POST(request: Request) {
     const api_key = crypto.randomUUID();
 
     const result = await query(
-      \INSERT INTO stores (name, location, telegram_bot_token, telegram_chat_id, api_key)
-       VALUES (\, \, \, \, \)
-       RETURNING *\,
+      `INSERT INTO stores (name, location, telegram_bot_token, telegram_chat_id, api_key)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
       [name, location || null, telegram_bot_token || null, telegram_chat_id || null, api_key]
     );
 
