@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { query } from '../db';
 import crypto from 'crypto';
+import { gerarCodigo } from '../provisioning/codigo';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +12,7 @@ export async function GET(request: Request) {
     
     let res;
     if (store_id) {
-      res = await query('SELECT * FROM appliances WHERE store_id = \ ORDER BY id ASC', [store_id]);
+      res = await query('SELECT * FROM appliances WHERE store_id = $1 ORDER BY id ASC', [store_id]);
     } else {
       res = await query('SELECT * FROM appliances ORDER BY id ASC');
     }
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
     }
 
     const edge_key = crypto.randomUUID();
-    const provisioning_code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const provisioning_code = gerarCodigo();
 
     const result = await query(
       `INSERT INTO appliances (store_id, label, target_version, edge_key, provisioning_code, status)

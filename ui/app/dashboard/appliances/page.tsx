@@ -69,23 +69,20 @@ export default function AppliancesManagementPage() {
             <CheckCircle2 className="text-emerald-400" size={24} />
             <h2 className="text-xl font-bold text-emerald-400">Dispositivo Cadastrado com Sucesso!</h2>
           </div>
-          <p className="text-slate-300 mb-6">Para conectar a câmera/placa física (Radxa) à nuvem, acesse o terminal do equipamento e cole o comando abaixo. Ele fará o provisionamento injetando a chave única.</p>
+          <p className="text-slate-300 mb-6">Para conectar a câmera/placa física (Radxa) à nuvem, acesse a interface local de implantação e insira o PIN gerado abaixo.</p>
           
           <div className="bg-slate-950 rounded-lg p-4 font-mono text-sm border border-slate-800 relative group flex items-start justify-between">
-            <div className="text-emerald-300 break-all pr-8">
-              sudo /opt/visioncam/edge_provisioning.py --edge_key {newAppliance.edge_key} --store_id {newAppliance.store_id}
+            <div className="text-emerald-300 pr-8">
+              <strong>1.</strong> Ligue o equipamento na rede local.<br/>
+              <strong>2.</strong> Acesse no navegador: <span className="text-white">http://&lt;IP-DO-RADXA&gt;:8080</span><br/>
+              <strong>3.</strong> Insira o PIN de implantação: <span className="text-amber-400 font-bold text-lg">{newAppliance.provisioning_code}</span>
             </div>
-            <button 
-              onClick={() => copyToClipboard(`sudo /opt/visioncam/edge_provisioning.py --edge_key ${newAppliance.edge_key} --store_id ${newAppliance.store_id}`)}
-              className="absolute top-4 right-4 p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-md transition-colors"
-              title="Copiar comando"
-            >
-              {copied ? <CheckCircle2 size={16} className="text-emerald-400"/> : <Copy size={16} />}
-            </button>
           </div>
-          <div className="mt-4 flex items-center gap-2 text-sm text-slate-400 bg-slate-900/50 p-3 rounded-lg">
-            <Key size={14} className="text-blue-400"/>
-            <span><strong>Edge Key:</strong> <span className="font-mono text-slate-300">{newAppliance.edge_key}</span></span>
+          <div className="mt-4 flex flex-col gap-2 text-sm text-slate-400 bg-slate-900/50 p-3 rounded-lg">
+            <div className="flex items-center gap-2">
+              <Key size={14} className="text-blue-400"/>
+              <span><strong>Edge Key (Interna):</strong> <span className="font-mono text-slate-300">{newAppliance.edge_key}</span></span>
+            </div>
           </div>
         </div>
       )}
