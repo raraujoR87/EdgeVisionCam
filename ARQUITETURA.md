@@ -88,13 +88,59 @@ configuração e a fila de sincronização com a nuvem.
 ### Modelo de dados
 
 ```
-stores ──┬── appliances ──── hardware_status
-         ├── users
-         └── events
+organizations  (o cliente que assina — o inquilino)
+   ├── stores           (unidades físicas)
+   │      └── appliances
+   │             └── hardware_status
+   │      └── events
+   └── memberships      (quem acessa o quê, com qual papel)
+                └── users
 ```
 
-Uma loja (`store`) é o **inquilino**. Todo dado pertence a exatamente uma loja.
-Um appliance pertence a uma loja; uma loja pode ter vários appliances.
+**O inquilino é a organização, não a loja.** Uma rede com 5 lojas é um cliente
+com cinco unidades, e o gestor dela precisa enxergar o conjunto.
+
+O modelo anterior amarrava `users.store_id` a uma loja só — uma rede exigiria
+cinco contas separadas, sem visão consolidada. Isso trava no segundo cliente,
+não no milésimo. Ver [`shared/schema_multitenant.sql`](shared/schema_multitenant.sql).
+
+`memberships` é tabela separada de propósito: papel como coluna do usuário é um
+papel para a vida toda; como linha de associação, a mesma pessoa pode ser
+`STORE_ADMIN` numa rede e `STORE_VIEWER` em outra.
+
+### Isolamento entre inquilinos
+
+O isolamento é **imposto pelo banco**, via Row Level Security — não pelo código
+da aplicação.
+
+A diferença é o modo de falha. Com filtro em código, um `WHERE store_id`
+esquecido não gera erro: devolve dados de outro cliente. Com RLS, uma consulta
+sem contexto devolve **zero linhas**. Esquecer passa a quebrar de forma visível.
+
+A identidade é declarada por transação, com `SET LOCAL` — nunca `SET`:
+
+```ts
+await comInquilino(contextoDoToken(sessao), async (cliente) => {
+  return cliente.query('SELECT * FROM events');   // já filtrado pelo banco
+});
+```
+
+`SET` valeria pela sessão inteira e, num pool, a próxima requisição herdaria a
+identidade da anterior — um cliente veria os dados de quem usou a conexão antes.
+Ver [`ui/app/api/tenant.ts`](ui/app/api/tenant.ts).
+
+### Governança
+
+| Recurso | Onde |
+|---|---|
+| Trilha de auditoria (quem fez o quê, quando, de onde) | `audit_log` |
+| Limites por plano (lojas, appliances) | `organizations.max_*` + `dentroDoLimite()` |
+| Suspensão sem perda de dados | `organizations.status` |
+| Ingestão do appliance com papel restrito | `visioncam_ingest` |
+
+A auditoria é gravada **dentro da mesma transação** da ação auditada. Fora dela,
+produziria registro de coisas que não aconteceram (rollback após o log) ou ações
+sem registro (falha ao logar).
 
 ### Papéis (RBAC)
 
