@@ -36,3 +36,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
+
+export async function PUT(request: Request) {
+  try {
+    const body = await request.json();
+    const { id, name, location, telegram_bot_token, telegram_chat_id, operating_hours, business_rules, timezone } = body;
+
+    if (!id) {
+      return NextResponse.json({ error: 'Store ID is required' }, { status: 400 });
+    }
+
+    const result = await query(
+      `UPDATE stores 
+       SET name = COALESCE($1, name),
+           location = COALESCE($2, location),
+           telegram_bot_token = COALESCE($3, telegram_bot_token),
+           telegram_chat_id = COALESCE($4, telegram_chat_id),
+           operating_hours = COALESCE($5, operating_hours),
+           business_rules = COALESCE($6, business_rules),
+           timezone = COALESCE($7, timezone)
+       WHERE id = $8
+       RETURNING *`,
+      [name, location, telegram_bot_token, telegram_chat_id, operating_hours ? JSON.stringify(operating_hours) : null, business_rules, timezone, id]
+    );
+
+    if (result.rowCount === 0) {
+      return NextResponse.json({ error: 'Store not found' }, { status: 404 });
+    }
+
+    return NextResponse.json(result.rows[0]);
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}

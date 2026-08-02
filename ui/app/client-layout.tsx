@@ -1,7 +1,7 @@
 "use client"
 import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server, Store, HardDrive } from 'lucide-react'
+import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server, Store, HardDrive, BarChart3, Users, Cog } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { getApiUrl } from './utils/api'
 
@@ -114,41 +114,50 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         </div>
         
         <nav className="flex-1 px-4 space-y-2 mt-4">
-          {isClient ? (
-            // Sidebar exclusivo para clientes/lojistas
-            <>
-              <Link href="/dashboard/events" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/events' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <Shield size={20} />
-                <span className="font-medium">Minha Loja</span>
-              </Link>
-            </>
-          ) : isCloudMode ? (
-            // Sidebar para Administradores da Nuvem
+          {user?.role === 'SUPER_ADMIN' && isCloudMode ? (
+            // Sidebar para Administradores da Nuvem (Equipe Interna)
             <>
               <Link href="/dashboard" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <LayoutDashboard size={20} />
-                <span className="font-medium">Dashboard Central</span>
+                <span className="font-medium">Painel Administrativo</span>
               </Link>
               <Link href="/dashboard/stores" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/stores' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Store size={20} />
-                <span className="font-medium">Gerenciar Lojas</span>
+                <span className="font-medium">Lojas & Clientes</span>
               </Link>
               <Link href="/dashboard/appliances" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/appliances' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <HardDrive size={20} />
-                <span className="font-medium">Dispositivos (Edge)</span>
-              </Link>
-              <Link href="/dashboard/events" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/events' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <Shield size={20} />
-                <span className="font-medium">Auditoria Global</span>
+                <span className="font-medium">Dispositivos Edge</span>
               </Link>
               <Link href="/dashboard/deploys" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/deploys' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Server size={20} />
-                <span className="font-medium">Deploys da Frota</span>
+                <span className="font-medium">Frota & Deploys</span>
               </Link>
-              <Link href="/" className="flex items-center gap-3 px-4 py-3 text-slate-400 hover:bg-slate-800 hover:text-white rounded-xl transition-colors">
-                <ExternalLink size={20} />
-                <span className="font-medium">Voltar para Borda</span>
+            </>
+          ) : user && ['STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER'].includes(user.role) && isCloudMode ? (
+            // Sidebar para Clientes (Painel BI e Gestão da Loja)
+            <>
+              <Link href="/dashboard/analytics" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/analytics' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <BarChart3 size={20} />
+                <span className="font-medium">BI & Analytics</span>
               </Link>
+              <Link href="/dashboard/events" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/events' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <Shield size={20} />
+                <span className="font-medium">Monitoramento</span>
+              </Link>
+              
+              {user.role === 'STORE_ADMIN' && (
+                <>
+                  <Link href="/dashboard/team" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/team' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                    <Users size={20} />
+                    <span className="font-medium">Minha Equipe</span>
+                  </Link>
+                  <Link href="/dashboard/settings" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/settings' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                    <Cog size={20} />
+                    <span className="font-medium">Regras & IA</span>
+                  </Link>
+                </>
+              )}
             </>
           ) : (
             // Sidebar para Técnico Local (Borda)
@@ -160,10 +169,6 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
               <Link href="/settings" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/settings' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Settings size={20} />
                 <span className="font-medium">Engine Room</span>
-              </Link>
-              <Link href="/dashboard" className="flex items-center gap-3 px-4 py-3 text-blue-400 hover:bg-slate-800 hover:text-blue-300 rounded-xl transition-colors">
-                <ExternalLink size={20} />
-                <span className="font-medium font-bold">Nuvem Central</span>
               </Link>
             </>
           )}

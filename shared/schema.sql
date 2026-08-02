@@ -12,6 +12,9 @@ CREATE TABLE IF NOT EXISTS stores (
     portainer_endpoint VARCHAR(255),  -- Regulagem do Portainer Edge Agent
     telegram_bot_token VARCHAR(100),   -- Bot Telegram específico por loja
     telegram_chat_id VARCHAR(100),     -- Chat Telegram específico por loja
+    operating_hours JSONB,             -- Horários de funcionamento ex: {"open":"08:00","close":"22:00"}
+    business_rules TEXT,               -- Regras de negócio / contexto para o Gemini
+    timezone VARCHAR(50) DEFAULT 'America/Sao_Paulo',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -60,7 +63,7 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(255) UNIQUE NOT NULL,
     password_hash VARCHAR(255) NOT NULL, -- Hash SHA256 da senha do usuário
     store_id INTEGER REFERENCES stores(id) ON DELETE SET NULL, -- NULL para administradores globais
-    role VARCHAR(50) DEFAULT 'client', -- 'admin' ou 'client'
+    role VARCHAR(50) DEFAULT 'STORE_VIEWER', -- 'SUPER_ADMIN', 'STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER'
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
