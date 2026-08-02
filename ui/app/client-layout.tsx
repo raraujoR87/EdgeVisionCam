@@ -75,10 +75,17 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
 
   // Redirecionamento de segurança para Clientes
   useEffect(() => {
-    if (user && user.role === 'client') {
-      const isTryingToAccessAdminPages = pathname === '/' || pathname === '/setup' || pathname === '/settings' || pathname === '/dashboard';
+    if (user && ['client', 'STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER'].includes(user.role)) {
+      const isTryingToAccessAdminPages = pathname === '/' || pathname === '/setup' || pathname === '/settings' || pathname === '/dashboard' || pathname === '/dashboard/stores' || pathname === '/dashboard/appliances' || pathname === '/dashboard/deploys';
+      
       if (isTryingToAccessAdminPages) {
         window.location.href = '/dashboard/events'
+      }
+    }
+    
+    if (user && ['admin', 'SUPER_ADMIN'].includes(user.role)) {
+      if (pathname === '/') {
+        window.location.href = '/dashboard'
       }
     }
   }, [user, pathname])
@@ -114,7 +121,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         </div>
         
         <nav className="flex-1 px-4 space-y-2 mt-4">
-          {user?.role === 'SUPER_ADMIN' && isCloudMode ? (
+          {user && ['SUPER_ADMIN', 'admin'].includes(user.role) && isCloudMode ? (
             // Sidebar para Administradores da Nuvem (Equipe Interna)
             <>
               <Link href="/dashboard" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
@@ -134,7 +141,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 <span className="font-medium">Frota & Deploys</span>
               </Link>
             </>
-          ) : user && ['STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER'].includes(user.role) && isCloudMode ? (
+          ) : user && ['STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER', 'client'].includes(user.role) && isCloudMode ? (
             // Sidebar para Clientes (Painel BI e Gestão da Loja)
             <>
               <Link href="/dashboard/analytics" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/analytics' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
@@ -159,7 +166,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 </>
               )}
             </>
-          ) : (
+          ) : !isCloudMode ? (
             // Sidebar para Técnico Local (Borda)
             <>
               <Link href="/setup" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/setup' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
@@ -171,7 +178,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 <span className="font-medium">Engine Room</span>
               </Link>
             </>
-          )}
+          ) : null}
         </nav>
 
         <div className="px-4 py-2 border-t border-slate-800/60">
