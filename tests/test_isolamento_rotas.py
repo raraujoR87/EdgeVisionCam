@@ -20,7 +20,7 @@ API = os.path.join(RAIZ, "ui", "app", "api")
 # Rotas que servem dado pertencente a cliente e são acessadas por sessão de
 # usuário. Ingestão (telemetry/webhook) e provisionamento usam outra credencial
 # e estão fora deste conjunto de propósito.
-ROTAS_DE_INQUILINO = ["stores/route.ts"]
+ROTAS_DE_INQUILINO = ["stores/route.ts", "users/route.ts"]
 
 
 def _ler(caminho):
@@ -126,3 +126,59 @@ def test_pool_unico_no_processo():
         tenant = arquivo.read()
     assert "from './db'" in tenant and "obterPool" in tenant
     assert "new Pool(" not in tenant, "tenant.ts abre o próprio pool"
+
+
+# ── Gestão de equipe ───────────────────────────────────────────────
+
+def test_convite_nao_redefine_senha_de_conta_existente():
+    """
+    Reaproveitar a conta ao convidar é necessário — um consultor atende várias
+    redes. Mas redefinir a senha nesse caminho viraria tomada de conta: bastaria
+    convidar o e-mail de alguém para escolher a senha dele.
+    """
+    conteudo = _ler("users/route.ts")
+    corpo = re.search(r"export async function POST[\s\S]*?(?=\nexport async function )", conteudo).group(0)
+    # gerarHash só pode aparecer no ramo de criação.
+    assert corpo.count("gerarHash(password)") == 1
+    assert re.search(r"if \(existente\.rowCount\)[\s\S]{0,200}else \{", corpo), \
+        "não distingue conta existente de conta nova"
+    assert "não pode redefinir a senha" in corpo
+
+
+def test_papel_vem_de_lista_fechada():
+    """
+    Aceitar papel arbitrário deixa o valor cair na coluna e ser interpretado por
+    qualquer checagem futura que compare string solta.
+    """
+    conteudo = _ler("users/route.ts")
+    assert "PAPEIS_VALIDOS" in conteudo
+    assert "PAPEIS_VALIDOS.includes(role)" in conteudo
+    # STORE_ADMIN não pode criar SUPER_ADMIN por este caminho.
+    assert "'SUPER_ADMIN'" not in re.search(
+        r"const PAPEIS_VALIDOS = \[[^\]]*\]", conteudo).group(0)
+
+
+def test_organizacao_nao_fica_sem_administrador():
+    """
+    Sem esta checagem, um STORE_ADMIN se remove por engano e ninguém mais
+    convida equipe — só um SUPER_ADMIN destrava, o que vira chamado de suporte.
+    """
+    conteudo = _ler("users/route.ts")
+    corpo = re.search(r"export async function DELETE[\s\S]*", conteudo).group(0)
+    assert "última administração" in corpo
+    assert re.search(r"COUNT\(\*\)::int AS n FROM memberships[\s\S]{0,120}STORE_ADMIN", corpo)
+
+
+def test_remover_associacao_nao_apaga_a_conta():
+    """Quem atende três redes e sai de uma mantém acesso às outras duas."""
+    conteudo = _ler("users/route.ts")
+    corpo = re.search(r"export async function DELETE[\s\S]*", conteudo).group(0)
+    assert "DELETE FROM memberships" in corpo
+    assert "DELETE FROM users" not in corpo
+
+
+def test_store_admin_nao_convida_para_organizacao_alheia():
+    conteudo = _ler("users/route.ts")
+    corpo = re.search(r"export async function POST[\s\S]*?(?=\nexport async function )", conteudo).group(0)
+    assert "Organização fora do seu escopo" in corpo
+    assert "minhas.includes(orgId)" in corpo
