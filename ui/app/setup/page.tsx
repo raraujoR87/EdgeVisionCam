@@ -82,10 +82,42 @@ export default function ZoneSetup() {
     setPoints(prev => [...prev, { x, y }])
   }
 
+  const filteredZones = zones?.filter((z: any) => z.camera_name === selectedCameraName) || []
+
   const draw = useCallback(() => {
     const canvas = canvasRef.current; if (!canvas) return
     const ctx = canvas.getContext('2d'); if (!ctx) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
+    // Draw saved zones
+    filteredZones.forEach((z: any) => {
+      try {
+        const pts = typeof z.points_json === 'string' ? JSON.parse(z.points_json) : z.polygon;
+        if (!pts || pts.length < 3) return;
+        
+        ctx.beginPath()
+        ctx.moveTo(pts[0].x, pts[0].y)
+        pts.forEach((p: any) => ctx.lineTo(p.x, p.y))
+        ctx.closePath()
+        
+        if (z.is_active) {
+          ctx.fillStyle = 'rgba(79, 70, 229, 0.15)' // indigo
+          ctx.strokeStyle = '#818cf8'
+        } else {
+          ctx.fillStyle = 'rgba(100, 116, 139, 0.15)' // slate
+          ctx.strokeStyle = '#94a3b8'
+        }
+        ctx.fill()
+        ctx.lineWidth = 2; ctx.stroke()
+        
+        // Draw zone name
+        ctx.font = '12px Inter, sans-serif'
+        ctx.fillStyle = z.is_active ? '#c7d2fe' : '#cbd5e1'
+        ctx.fillText(z.name.toUpperCase(), pts[0].x + 10, pts[0].y + 15)
+      } catch (e) {
+        // Skip invalid polygons
+      }
+    })
+
     if (points.length === 0) return
     
     ctx.beginPath(); ctx.setLineDash([5, 5]); ctx.moveTo(points[0].x, points[0].y)
@@ -100,7 +132,7 @@ export default function ZoneSetup() {
       ctx.fillStyle = i === 0 ? '#fbbf24' : '#fff'; ctx.fill()
       ctx.shadowBlur = 10; ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.stroke()
     })
-  }, [points])
+  }, [points, filteredZones])
 
   useEffect(() => { draw() }, [draw])
 
@@ -165,8 +197,6 @@ export default function ZoneSetup() {
     }
     return '';
   }
-
-  const filteredZones = zones?.filter((z: any) => z.camera_name === selectedCameraName) || []
 
   return (
     <div className="flex flex-col space-y-8 animate-in fade-in duration-700 pb-20">

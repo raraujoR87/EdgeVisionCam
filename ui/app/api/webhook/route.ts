@@ -25,12 +25,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Faltando cabeçalho x-store-api-key' }, { status: 401 });
     }
 
-    // 1. Validar a loja pela API Key no Supabase
-    const storeRes = await query('SELECT id, name, telegram_bot_token, telegram_chat_id FROM stores WHERE api_key = $1', [apiKey]);
-    if (storeRes.rowCount === 0) {
-      return NextResponse.json({ error: 'Chave de API inválida' }, { status: 401 });
+    // 1. Validar o appliance pela API Key no Supabase (usando edge_key)
+    let applianceId: number;
+    let store: any;
+    
+    const deviceRes = await query(`
+      SELECT a.id as appliance_id, s.id as store_id, s.name, s.telegram_bot_token, s.telegram_chat_id 
+      FROM appliances a 
+      JOIN stores s ON a.store_id = s.id 
+      WHERE a.edge_key = $1
+    `, [apiKey]);
+
+    if (deviceRes.rowCount > 0) {
+      applianceId = deviceRes.rows[0].appliance_id;
+      store = deviceRes.rows[0];
+    } else {
+      // Fallback legado para Stores (se o dispositivo usar a key antiga)
+      const storeRes = await query('SELECT id as store_id, name, telegram_bot_token, telegram_chat_id FROM stores WHERE api_key = $1', [apiKey]);
+      if (storeRes.rowCount === 0) {
+        return NextResponse.json({ error: 'Chave de API inválida' }, { status: 401 });
+      }
+      store = storeRes.rows[0];
+      
+      // Auto-migrar: criar um appliance legado para essa loja
+      const newDev = await query("INSERT INTO appliances (store_id, edge_key, status, label) VALUES ($1, $2, 'ATIVO', 'Appliance Legado') RETURNING id", [store.store_id, apiKey]);
+      applianceId = newDev.rows[0].id;
     }
-    const store = storeRes.rows[0];
 
     // 2. Extrair os arquivos e metadados do form-data
     const formData = await request.formData();
@@ -79,22 +99,28 @@ export async function POST(request: Request) {
       videoUrl = `/storage/clips/${videoFile.name}`;
     }
 
-    // 4. Executar a auditoria de IA com o Gemini
-    const geminiKey = process.env.GEMINI_API_KEY;
-    if (!geminiKey) {
-      return NextResponse.json({ error: 'Chave de API do Gemini não configurada no servidor' }, { status: 500 });
-    }
+    // 4. Executar a auditoria de IA com o Gemini (ou pular se já vier da borda)
+    let verdict: any = null;
 
-    const genAI = new GoogleGenerativeAI(geminiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    if (telemetry.final_verdict) {
+      console.log('[Webhook] Bypass Gemini: Recebeu veredicto pré-processado da borda.');
+      verdict = telemetry.final_verdict;
+    } else {
+      const geminiKey = process.env.GEMINI_API_KEY;
+      if (!geminiKey) {
+        return NextResponse.json({ error: 'Chave de API do Gemini não configurada no servidor' }, { status: 500 });
+      }
 
-    const dossierText = `RELATÓRIO BIOMECÂNICO E DE TRAJETÓRIA (Edge YOLO)
+      const genAI = new GoogleGenerativeAI(geminiKey);
+      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+      const dossierText = `RELATÓRIO BIOMECÂNICO E DE TRAJETÓRIA (Edge YOLO)
 - ID do Personagem: ${telemetry.p_id || "N/A"}
 - Nível de Risco na Borda: ${telemetry.intent_analysis?.risk_level || "desconhecido"} (Score: ${telemetry.intent_analysis?.intent_score || 0.0})
 - Duração: ${telemetry.video_duration_s || 0.0} segundos
 - Produtos Detectados: ${telemetry.products ? telemetry.products.join(', ') : 'Nenhum'}`;
 
-    const prompt = `Você é o Auditor de Prevenção de Perdas sênior (Líder da Equipe SOC).
+      const prompt = `Você é o Auditor de Prevenção de Perdas sênior (Líder da Equipe SOC).
 Seu objetivo é assistir a este vídeo da câmera de segurança e analisar o parecer biomecânico enviado pela borda para tomar a decisão final se ocorreu um furto/ocultação de produto ou se a ação foi inocente.
 
 PARECER DO ANALISTA BIOMECÂNICO (Métricas de Borda):
@@ -117,26 +143,28 @@ Retorne APENAS um JSON válido seguindo a estrutura abaixo, sem marcações mark
   "explanation": "detalhe detalhado do porquê desta classificação com base no vídeo"
 }`;
 
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          data: videoBuffer.toString('base64'),
-          mimeType: videoFile.type || 'video/mp4'
-        }
-      },
-      prompt
-    ]);
+      const result = await model.generateContent([
+        {
+          inlineData: {
+            data: videoBuffer.toString('base64'),
+            mimeType: videoFile.type || 'video/mp4'
+          }
+        },
+        prompt
+      ]);
 
-    const rawResponse = result.response.text().trim();
-    const cleanJsonText = rawResponse.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-    const verdict = JSON.parse(cleanJsonText);
+      const rawResponse = result.response.text().trim();
+      const cleanJsonText = rawResponse.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+      verdict = JSON.parse(cleanJsonText);
+    }
 
     // 5. Gravar o resultado no Banco de Dados Supabase Postgres central
     await query(`
-      INSERT INTO events (store_id, video_url, telemetry, suspicion_score, verdict, verdict_explanation, analyzed_at)
-      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      INSERT INTO events (store_id, appliance_id, video_url, telemetry, suspicion_score, verdict, verdict_explanation, analyzed_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
     `, [
-      store.id,
+      store.store_id,
+      applianceId,
       videoUrl,
       JSON.stringify(telemetry),
       verdict.is_theft ? verdict.confidence : 0.0,

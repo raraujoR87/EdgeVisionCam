@@ -11,11 +11,13 @@ interface EventData {
   id: number;
   store_name: string;
   store_location: string;
+  appliance_name?: string;
   video_url: string;
   telemetry: any;
   suspicion_score: number;
   verdict: string;
   verdict_explanation: string | null;
+  human_feedback?: string | null;
   analyzed_at: string;
 }
 
@@ -80,10 +82,12 @@ export default async function EventsPage({
 
     // 3. Obter eventos filtrados
     let queryText = `
-      SELECT e.id, e.video_url, e.telemetry, e.suspicion_score, e.verdict, e.verdict_explanation, e.analyzed_at,
-             s.name as store_name, s.location as store_location
+      SELECT e.id, e.video_url, e.telemetry, e.suspicion_score, e.verdict, e.verdict_explanation, e.human_feedback, e.analyzed_at,
+             s.name as store_name, s.location as store_location,
+             a.label as appliance_name
       FROM events e
       JOIN stores s ON e.store_id = s.id
+      LEFT JOIN appliances a ON e.appliance_id = a.id
       WHERE 1=1
     `;
     const params: any[] = [];
@@ -273,6 +277,11 @@ export default async function EventsPage({
                           <BadgeIcon size={12} />
                           {event.verdict.replace('_', ' ')}
                         </span>
+                        {event.human_feedback && (
+                          <span className={`ml-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-bold ${event.human_feedback === 'TRUE_POSITIVE' ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-800/30' : 'bg-slate-800/50 text-slate-400 border border-slate-700/50'}`}>
+                            {event.human_feedback === 'TRUE_POSITIVE' ? '✔ CONFIRMADO (HUMANO)' : '✖ ALARME FALSO'}
+                          </span>
+                        )}
                       </div>
                       <span className="text-xs text-slate-500 font-mono flex items-center gap-1">
                         <Calendar size={12} />
@@ -284,13 +293,29 @@ export default async function EventsPage({
                       {event.store_name}
                     </h3>
                     <p className="text-xs text-slate-500 flex items-center gap-1 mb-4">
-                      <MapPin size={12} /> {event.store_location}
+                      <MapPin size={12} />
+                      {event.store_location}
+                      {event.appliance_name && (
+                        <span className="ml-2 px-1.5 py-0.5 bg-slate-800 rounded font-mono text-[10px]">{event.appliance_name}</span>
+                      )}
                     </p>
 
-                    <p className="text-sm text-slate-300 line-clamp-3 bg-slate-950/30 p-3 rounded-lg border border-slate-800/30 leading-relaxed font-sans">
-                      {event.verdict_explanation || 'Nenhuma justificativa textual fornecida.'}
-                    </p>
+                    <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800/40 text-sm text-slate-300 leading-relaxed max-h-32 overflow-y-auto custom-scrollbar">
+                      <strong className="text-slate-400 block mb-1 text-xs uppercase tracking-wider">Auditoria Gemini:</strong>
+                      {event.verdict_explanation || 'Sem explicação detalhada.'}
+                    </div>
                   </div>
+
+                  {!event.human_feedback && !isOffline && (
+                    <div className="flex gap-2 mt-4">
+                      <button className="flex-1 py-1.5 bg-emerald-900/20 hover:bg-emerald-900/40 text-emerald-400 border border-emerald-800/30 rounded text-xs font-bold transition-colors">
+                        Confirmar Acerto (Verdadeiro)
+                      </button>
+                      <button className="flex-1 py-1.5 bg-slate-800/40 hover:bg-slate-700/50 text-slate-300 border border-slate-700/50 rounded text-xs font-bold transition-colors">
+                        Alarme Falso (Falso Positivo)
+                      </button>
+                    </div>
+                  )}
 
                   {/* Rodapé do Evento */}
                   <div className="pt-4 border-t border-slate-800/40 flex justify-between items-center text-xs">

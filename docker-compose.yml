@@ -153,6 +153,10 @@ services:
       - db_data:/app/core/database/data
       - ./storage/events:/app/edge/storage/events
       - ./frigate_config.yml:/app/frigate_config.yml
+      # Montado para que coletar_calibracao.sh persista as imagens no host.
+      # Sem isto, prepare_calibration.py escreve na camada do container e as
+      # imagens somem no próximo restart. Remova após concluir a compilação NPU.
+      - ./npu_compilation:/app/npu_compilation
       # O socket do host deixou de ser montado aqui — ver docker-socket-proxy.
     ports:
       - "8000:8000"   # API, consumida pelo navegador do técnico

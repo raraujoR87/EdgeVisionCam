@@ -152,18 +152,21 @@ async def node_video_investigator(state: GraphState) -> Dict[str, Any]:
             
     model_source = config_dict.get('model_source', 'hybrid').lower()
     cloud_url = config_dict.get('cloud_api_url') or os.getenv("CLOUD_API_URL")
-    api_key = config_dict.get('store_api_key') or os.getenv("STORE_API_KEY")
+    
+    # Priorizar o EDGE_KEY (identidade única do appliance). Fallback para STORE_API_KEY (legado)
+    api_key = config_dict.get('edge_key') or os.getenv("EDGE_KEY") or config_dict.get('store_api_key') or os.getenv("STORE_API_KEY")
     
     video_path = os.path.join(EVENT_STORAGE, event.video_path)
     if not os.path.exists(video_path):
         return {"video_analysis": {"error": "Vídeo ausente", "description": "Arquivo de vídeo ausente na borda."}}
         
     # Roteamento Cloud (Vercel API Gateway)
-    if model_source == 'cloud':
+    if model_source == 'cloud' or model_source == 'hybrid':
         if not cloud_url or not api_key:
-            err_msg = "Configurações de nuvem ausentes (cloud_api_url ou store_api_key)."
+            err_msg = "Configurações de nuvem ausentes (cloud_api_url, edge_key ou store_api_key)."
             print(f"  [BRAIN CLOUD ERR] {err_msg}")
-            return {"video_analysis": {"error": "Configuração ausente", "description": err_msg}}
+            if model_source == 'cloud':
+                return {"video_analysis": {"error": "Configuração ausente", "description": err_msg}}
             
         print(f"  [BRAIN CLOUD] Encaminhando evento {event.id} para a nuvem: {cloud_url}...")
         try:
@@ -174,6 +177,7 @@ async def node_video_investigator(state: GraphState) -> Dict[str, Any]:
             
             url = f"{cloud_url.rstrip('/')}/api/webhook"
             headers = {
+                # O painel na nuvem agora extrai o edge_key deste cabeçalho
                 "x-store-api-key": api_key
             }
             
@@ -363,17 +367,55 @@ async def node_dispatcher(state: GraphState) -> Dict[str, Any]:
             )
             await db.commit()
             
+        # -------------------------------------------------------------
+        # Buscar credenciais do banco (Telegram e Nuvem)
+        # -------------------------------------------------------------
+        async with aiosqlite.connect(SYSTEM_DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("SELECT key, value FROM config WHERE key IN ('telegram_bot_token', 'telegram_chat_id', 'camera_name', 'cloud_api_url', 'store_api_key', 'model_source')") as cursor:
+                rows = await cursor.fetchall()
+                config_dict = {row['key']: row['value'] for row in rows}
+        
+        bot_token = config_dict.get('telegram_bot_token') or os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = config_dict.get('telegram_chat_id') or os.getenv("TELEGRAM_CHAT_ID")
+        camera_name = config_dict.get('camera_name') or "Câmera de Monitoramento"
+        cloud_url = config_dict.get('cloud_api_url') or os.getenv("CLOUD_API_URL")
+        api_key = config_dict.get('store_api_key') or os.getenv("STORE_API_KEY")
+        model_source = config_dict.get('model_source', 'hybrid').lower()
+        
+        full_video_path = os.path.join(EVENT_STORAGE, event.video_path) if event.video_path else None
+        
+        # -------------------------------------------------------------
+        # Sincronizar com o Cloud Hub (se não foi enviado antes no modo cloud)
+        # -------------------------------------------------------------
+        if model_source != 'cloud' and cloud_url and api_key and full_video_path and os.path.exists(full_video_path):
+            print(f"  [BRAIN CLOUD SYNC] Enviando evento resolvido (Modo Híbrido) para a nuvem: {cloud_url}...")
+            sync_url = f"{cloud_url.rstrip('/')}/api/webhook"
+            headers = {"x-store-api-key": api_key}
+            
+            # Adiciona o verdict final para que o webhook da nuvem faça BYPASS no Gemini
+            sync_payload = {**merged_payload, "final_verdict": verdict}
+            
+            def sync_to_cloud():
+                try:
+                    with open(full_video_path, 'rb') as vf:
+                        files = {'video': (event.video_path, vf, 'video/mp4')}
+                        data = {'telemetry': json.dumps(sync_payload)}
+                        resp = requests.post(sync_url, headers=headers, data=data, files=files, timeout=30)
+                        if resp.status_code == 200:
+                            print("  [BRAIN CLOUD SYNC] Sincronizado com sucesso.")
+                        else:
+                            print(f"  [BRAIN CLOUD SYNC] Falha {resp.status_code}: {resp.text}")
+                except Exception as ex:
+                    print(f"  [BRAIN CLOUD SYNC] Exceção: {ex}")
+            
+            # Fire and forget para não travar o dispatcher
+            asyncio.get_event_loop().run_in_executor(None, sync_to_cloud)
+
+        # -------------------------------------------------------------
+        # Enviar alerta para o Telegram
+        # -------------------------------------------------------------
         if status in ("THEFT_CONFIRMED", "SUSPICIOUS"):
-            async with aiosqlite.connect(SYSTEM_DB_PATH) as db:
-                db.row_factory = aiosqlite.Row
-                async with db.execute("SELECT key, value FROM config WHERE key IN ('telegram_bot_token', 'telegram_chat_id', 'camera_name')") as cursor:
-                    rows = await cursor.fetchall()
-                    config_dict = {row['key']: row['value'] for row in rows}
-            
-            bot_token = config_dict.get('telegram_bot_token') or os.getenv("TELEGRAM_BOT_TOKEN")
-            chat_id = config_dict.get('telegram_chat_id') or os.getenv("TELEGRAM_CHAT_ID")
-            camera_name = config_dict.get('camera_name') or "Câmera de Monitoramento"
-            
             if bot_token and chat_id:
                 event_datetime = original_payload.get('event_datetime', '')
                 products_stolen = verdict.get('products_stolen', original_payload.get('products', []))
@@ -389,7 +431,6 @@ async def node_dispatcher(state: GraphState) -> Dict[str, Any]:
                 msg = f"📍 <b>Câmera:</b> {camera_name}\n{title_line}{datetime_line}{products_line}\n\n📝 {telegram_report}\n\n👤 <b>Suspeito:</b> {suspect_desc}"
                 print(f"  [TELEGRAM] Enviando alerta {status} para o grupo...")
                 
-                full_video_path = os.path.join(EVENT_STORAGE, event.video_path) if event.video_path else None
                 asyncio.create_task(send_telegram_alert(bot_token, chat_id, msg, full_video_path))
             else:
                 print(f"  [TELEGRAM] Credenciais nao configuradas (token/chat_id).")

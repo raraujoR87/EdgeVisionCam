@@ -61,15 +61,24 @@ def analyze_and_enqueue_clip(event_id: str, camera: str, label: str):
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             try:
-                cur.execute("SELECT points_json FROM zones WHERE is_active = 1 AND camera_name = ?", (camera,))
+                cur.execute("SELECT points_json, camera_name FROM zones WHERE is_active = 1")
             except sqlite3.OperationalError:
                 # Fallback if migration hasn't run yet or table is old
-                cur.execute("SELECT points_json FROM zones WHERE is_active = 1")
+                cur.execute("SELECT points_json, 'camera_principal' as camera_name FROM zones WHERE is_active = 1")
             
+            import re
+            def sanitize(name: str) -> str:
+                c = name.lower().strip()
+                c = re.sub(r'[^a-z0-9_]', '_', c)
+                c = re.sub(r'_+', '_', c)
+                return c.strip('_')
+
             for row in cur.fetchall():
-                pts = json.loads(row['points_json'])
-                poly = np.array([[p['x'], p['y']] for p in pts], dtype=np.int32)
-                zones_polygons.append(poly)
+                db_cam = row['camera_name']
+                if sanitize(db_cam) == camera:
+                    pts = json.loads(row['points_json'])
+                    poly = np.array([[p['x'], p['y']] for p in pts], dtype=np.int32)
+                    zones_polygons.append(poly)
             conn.close()
             print(f"  [FRIGATE BRIDGE] Loaded {len(zones_polygons)} active zones for camera '{camera}'.")
         except Exception as zone_err:

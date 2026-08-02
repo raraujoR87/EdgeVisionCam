@@ -115,6 +115,7 @@ def gravar_env(config: dict, cloud_url: str = None, caminho: str = ARQUIVO_ENV) 
         "CLOUD_API_URL": (cloud_url or CLOUD_URL_PADRAO).rstrip("/"),
         "STORE_API_KEY": loja.get("api_key", ""),
         "STORE_NAME": loja.get("name", ""),
+        "EDGE_KEY": deploy.get("edge_key", ""),
     }
 
     preservadas = []

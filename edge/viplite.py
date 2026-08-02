@@ -545,7 +545,9 @@ class Grafo:
         )
         # copy() antes do unmap: as_array devolve uma view da memoria mapeada,
         # que deixa de ser valida assim que o buffer e desmapeado.
-        dados = bruto.view(tensor.dtype).reshape(tensor.dims).copy()
+        # tensor.dims de C vem como [fastest, ..., slowest] (ex: W, H, C, N).
+        # O NumPy espera (slowest, ..., fastest), entao revertemos a lista.
+        dados = bruto.view(tensor.dtype).reshape(tensor.dims[::-1]).copy()
         self._lib.vip_unmap_buffer(tensor.buffer)
         return tensor.desquantizar(dados)
 
