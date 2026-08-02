@@ -202,6 +202,9 @@ def decode_end_to_end(raw, conf_threshold):
     return boxes, scores, classes, kpts[..., 0:2], kpts[..., 2]
 
 
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -50, 50)))
+
 def decode_anchors(raw, conf_threshold, iou_threshold=0.45):
     """
     Decodifica `(56, A)` — ancoras brutas do YOLOv8/v11-pose.
@@ -210,7 +213,15 @@ def decode_anchors(raw, conf_threshold, iou_threshold=0.45):
     conversao para xyxy e NMS.
     """
     pred = raw.T  # (A, 56)
-    scores = pred[:, 4]
+    
+    # YOLOv8 ONNX exports already have sigmoid applied to the confidence scores!
+    # Due to int8 quantization scale (1.57), 0.0 stays 0.0, and 1.0 becomes 1.57.
+    # WORKAROUND NPU BUG: Col 4 (class conf) is completely zeroed out by VIPLite compiler.
+    # We use the max keypoint confidence as the bounding box confidence.
+    kpts_all = pred[:, 5:5 + NUM_KEYPOINTS * 3].reshape(-1, NUM_KEYPOINTS, 3)
+    kpts_conf_all = kpts_all[..., 2]
+    scores = np.max(kpts_conf_all, axis=1)
+    
     mask = scores >= conf_threshold
     pred, scores = pred[mask], scores[mask]
 
@@ -225,14 +236,20 @@ def decode_anchors(raw, conf_threshold, iou_threshold=0.45):
     boxes, scores, pred = boxes[keep], scores[keep], pred[keep]
 
     kpts = pred[:, 5:5 + NUM_KEYPOINTS * 3].reshape(-1, NUM_KEYPOINTS, 3)
+    kpts_conf = kpts[..., 2]
+    
     # O modelo de pose tem uma unica classe (pessoa).
     classes = np.zeros(len(boxes), dtype=int)
-    return boxes, scores, classes, kpts[..., 0:2], kpts[..., 2]
+    return boxes, scores, classes, kpts[..., 0:2], kpts_conf
+
 
 
 def decode_output(raw, conf_threshold, iou_threshold=0.45):
     """Escolhe o decodificador pelo formato do tensor."""
     arr = np.asarray(raw, dtype=np.float32)
+    
+    # VIPLite often puts the batch dimension at the end: (2100, 56, 1)
+    arr = np.squeeze(arr)
     if arr.ndim == 3:
         arr = arr[0]
 
@@ -243,6 +260,11 @@ def decode_output(raw, conf_threshold, iou_threshold=0.45):
     # dimensao: 57 colunas indicam o formato ja decodificado.
     if arr.shape[1] == 6 + NUM_KEYPOINTS * 3:
         return decode_end_to_end(arr, conf_threshold)
+    
+    # Se for (2100, 56) vindo da NPU com dims invertidas, transpõe para (56, 2100)
+    if arr.shape[1] == 5 + NUM_KEYPOINTS * 3:
+        arr = arr.T
+
     if arr.shape[0] == 5 + NUM_KEYPOINTS * 3:
         return decode_anchors(arr, conf_threshold, iou_threshold)
 
