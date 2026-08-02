@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { query } from '../../db';
-import { verifyToken } from '../tokens';
+import { query } from '../db';
+import { verifyToken } from '../auth/tokens';
 
 export const dynamic = 'force-dynamic';
 

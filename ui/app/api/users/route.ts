@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { query } from '../../db';
-import { verifyToken } from '../tokens';
-import { gerarHash } from '../passwords';
+import { query } from '../db';
+import { verifyToken } from '../auth/tokens';
+import { gerarHash } from '../auth/passwords';
 
 export const dynamic = 'force-dynamic';
 
