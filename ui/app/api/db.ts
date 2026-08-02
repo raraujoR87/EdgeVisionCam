@@ -24,7 +24,15 @@ export function isDatabaseNotConfigured(erro: unknown): boolean {
   return erro instanceof DatabaseNotConfiguredError;
 }
 
-export async function query(text: string, params?: any[]) {
+/**
+ * Pool unico do processo.
+ *
+ * Exportado para que `tenant.ts` reuse esta conexao em vez de abrir a propria:
+ * dois pools dobrariam as conexoes contra o Postgres — que no Supabase e um
+ * recurso limitado e compartilhado — e duplicariam a logica de SSL, que ja
+ * errou uma vez neste projeto.
+ */
+export function obterPool(): Pool {
   let connectionString = process.env.DATABASE_URL;
 
   if (connectionString) {
@@ -46,6 +54,9 @@ export async function query(text: string, params?: any[]) {
         : { rejectUnauthorized: false }
     });
   }
+  return pool;
+}
 
-  return pool.query(text, params);
+export async function query(text: string, params?: any[]) {
+  return obterPool().query(text, params);
 }

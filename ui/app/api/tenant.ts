@@ -1,4 +1,5 @@
-import { Pool, PoolClient } from 'pg';
+import { PoolClient } from 'pg';
+import { obterPool } from './db';
 import { TokenPayload } from './auth/tokens';
 
 /**
@@ -24,19 +25,6 @@ import { TokenPayload } from './auth/tokens';
  * usuário anterior. Um cliente veria os dados de quem usou a conexão antes.
  * `SET LOCAL` morre no COMMIT, então o vazamento é impossível por construção.
  */
-
-let pool: Pool | null = null;
-
-function obterPool(): Pool {
-  if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error('DATABASE_URL ausente.');
-    }
-    pool = new Pool({ connectionString, max: 5 });
-  }
-  return pool;
-}
 
 export interface ContextoInquilino {
   userId: number | string;
