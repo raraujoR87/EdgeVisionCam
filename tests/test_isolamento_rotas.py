@@ -285,3 +285,48 @@ def test_auditoria_restrita_a_quem_administra():
     conteudo = _ler("audit/route.ts")
     assert "ehSuperAdmin(sessao.role)" in conteudo
     assert "STORE_ADMIN" in conteudo
+
+
+# ── Restrições do App Router ───────────────────────────────────────
+
+def test_route_ts_so_exporta_o_que_o_next_aceita():
+    """
+    Um arquivo `route.ts` só pode exportar os handlers HTTP e alguns campos de
+    configuração conhecidos. Qualquer outro export quebra o BUILD com
+    "não é um campo de Route válido".
+
+    Este teste existe porque `tsc --noEmit` NÃO pega: a regra é do Next.js, não
+    do TypeScript. Eu exportei uma tabela de planos de dentro de uma rota, o
+    typecheck passou, e três deploys falharam.
+    """
+    permitidos = {
+        # Handlers HTTP
+        "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+        # Configuração de segmento aceita pelo App Router
+        "dynamic", "dynamicParams", "revalidate", "fetchCache",
+        "runtime", "preferredRegion", "maxDuration", "generateStaticParams",
+    }
+
+    problemas = []
+    for pasta, _, arquivos in os.walk(API):
+        if "route.ts" not in arquivos:
+            continue
+        caminho = os.path.join(pasta, "route.ts")
+        with open(caminho, encoding="utf-8") as f:
+            conteudo = f.read()
+        for nome in re.findall(
+            r"^export\s+(?:async\s+)?(?:function|const|let|var|class)\s+(\w+)",
+            conteudo, re.MULTILINE,
+        ):
+            if nome not in permitidos:
+                problemas.append(f"{os.path.relpath(caminho, API)} exporta '{nome}'")
+        # `export { x }` e `export type` também contam para o Next.
+        for bloco in re.findall(r"^export\s*\{([^}]*)\}", conteudo, re.MULTILINE):
+            for nome in (n.strip().split()[0] for n in bloco.split(",") if n.strip()):
+                if nome not in permitidos:
+                    problemas.append(f"{os.path.relpath(caminho, API)} reexporta '{nome}'")
+
+    assert not problemas, (
+        "Exports que o Next.js recusa em route.ts (mova para um módulo ao lado):\n  "
+        + "\n  ".join(problemas)
+    )

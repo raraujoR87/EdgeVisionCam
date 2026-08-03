@@ -5,6 +5,7 @@ import {
   Building2, Plus, Loader2, Store as StoreIcon, HardDrive, Users,
   Activity, AlertTriangle, PauseCircle, PlayCircle, ShieldAlert,
 } from 'lucide-react';
+import { PLANOS as PLANOS_API } from '../../api/planos';
 
 /**
  * Clientes (organizações) — a tela que faltava.
@@ -23,12 +24,14 @@ const fetcher = (url: string) => {
   return fetch(url, { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
 };
 
-const PLANOS = [
-  { id: 'trial', rotulo: 'Trial', lojas: 1, appliances: 2 },
-  { id: 'essencial', rotulo: 'Essencial', lojas: 3, appliances: 5 },
-  { id: 'profissional', rotulo: 'Profissional', lojas: 10, appliances: 25 },
-  { id: 'enterprise', rotulo: 'Enterprise', lojas: 500, appliances: 2000 },
-];
+// Mesma tabela que a API valida. Duplicar aqui faria a tela oferecer um plano
+// que a rota recusa — divergência que só aparece no clique do usuário.
+const PLANOS = Object.entries(PLANOS_API).map(([id, p]) => ({
+  id,
+  rotulo: p.rotulo,
+  lojas: p.max_stores,
+  appliances: p.max_appliances,
+}));
 
 const CORES_PLANO: Record<string, string> = {
   trial: 'bg-slate-700 text-slate-300',

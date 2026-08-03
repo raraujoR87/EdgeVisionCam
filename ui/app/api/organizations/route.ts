@@ -7,6 +7,7 @@ import {
   ipDaRequisicao,
 } from '../tenant';
 import { ehSuperAdmin, STORE_ADMIN } from '../papeis';
+import { PLANOS, Plano, planoValido } from '../planos';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,15 +22,6 @@ export const dynamic = 'force-dynamic';
  * aqui porque é aqui que a relação comercial existe — não na loja.
  */
 
-/** Planos e o que cada um comporta. Fonte única: a UI lê daqui. */
-export const PLANOS = {
-  trial:      { rotulo: 'Trial',      max_stores: 1,   max_appliances: 2 },
-  essencial:  { rotulo: 'Essencial',  max_stores: 3,   max_appliances: 5 },
-  profissional: { rotulo: 'Profissional', max_stores: 10, max_appliances: 25 },
-  enterprise: { rotulo: 'Enterprise', max_stores: 500, max_appliances: 2000 },
-} as const;
-
-type Plano = keyof typeof PLANOS;
 
 function extrairSessao(request: Request): TokenPayload | null {
   const header = request.headers.get('Authorization') || '';
@@ -134,7 +126,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'name é obrigatório.' }, { status: 400 });
   }
 
-  const planoEscolhido: Plano = (plan && plan in PLANOS ? plan : 'trial') as Plano;
+  const planoEscolhido: Plano = planoValido(plan) ? plan : 'trial';
   const limites = PLANOS[planoEscolhido];
 
   try {
@@ -207,7 +199,7 @@ export async function PUT(request: Request) {
   if (!id) {
     return NextResponse.json({ error: 'id é obrigatório.' }, { status: 400 });
   }
-  if (plan && !(plan in PLANOS)) {
+  if (plan && !planoValido(plan)) {
     return NextResponse.json(
       { error: `plan inválido. Aceitos: ${Object.keys(PLANOS).join(', ')}.` },
       { status: 400 },
