@@ -47,19 +47,32 @@
 -- COMO A APLICAÇÃO PRECISA MUDAR
 -- ---------------------------------------------------------------------------
 --
--- RLS depende de a conexão saber quem está perguntando. O backend usa um pool
--- com credencial de serviço, então a identidade precisa ser declarada por
--- transação:
+-- RLS depende de duas coisas, e a segunda quase passou despercebida.
+--
+-- Primeira: a conexão precisa saber quem está perguntando.
+-- Segunda: o papel da conexão precisa ESTAR SUJEITO à RLS.
+--
+-- No Supabase, a DATABASE_URL conecta como `postgres`, que tem
+-- `rolbypassrls = true`. Políticas não se aplicam a ele — nenhuma. Criar
+-- políticas e parar aí produziria isolamento decorativo: parece seguro, passa
+-- em revisão, não protege nada.
+--
+-- Por isso a migração cria `visioncam_app`, um papel NOBYPASSRLS que a
+-- aplicação assume por transação:
 --
 --     BEGIN;
---     SET LOCAL app.user_id = '42';
---     SET LOCAL app.is_super_admin = 'off';
---     SELECT * FROM events;        -- já vem filtrado pelo banco
+--     SET LOCAL ROLE visioncam_app;      -- passa a estar sujeito à RLS
+--     SELECT set_config('app.user_id', '42', true);
+--     SELECT set_config('app.is_super_admin', 'off', true);
+--     SELECT * FROM events;              -- já vem filtrado pelo banco
 --     COMMIT;
 --
--- `SET LOCAL` é obrigatório: sem o LOCAL, o valor vaza para a próxima requisição
--- que reaproveitar a mesma conexão do pool — e aí um cliente veria os dados de
--- quem usou a conexão antes. Ver ui/app/api/tenant.ts.
+-- `SET LOCAL` é obrigatório nos dois: sem o LOCAL, papel e contexto vazam para
+-- a próxima requisição que reaproveitar a conexão do pool. Ver
+-- ui/app/api/tenant.ts.
+--
+-- Verificado no banco de produção: um STORE_ADMIN da organização A recebe zero
+-- linhas ao consultar as lojas da organização B.
 -- ============================================================================
 
 
@@ -230,10 +243,24 @@ CREATE POLICY audit_isolamento ON audit_log
 
 DO $$
 BEGIN
+    -- Papel da aplicacao: sem bypass, e o unico caminho pelo qual a RLS vale.
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'visioncam_app') THEN
+        CREATE ROLE visioncam_app NOLOGIN NOBYPASSRLS;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'visioncam_ingest') THEN
         CREATE ROLE visioncam_ingest NOLOGIN;
     END IF;
 END $$;
+
+-- postgres precisa ser membro para conseguir assumir o papel na transacao.
+GRANT visioncam_app TO postgres;
+GRANT USAGE ON SCHEMA public TO visioncam_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO visioncam_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO visioncam_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO visioncam_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO visioncam_app;
 
 GRANT INSERT ON events, audit_log TO visioncam_ingest;
 GRANT SELECT, INSERT, UPDATE ON hardware_status TO visioncam_ingest;

@@ -174,3 +174,37 @@ def test_ingestao_do_appliance_nao_le_a_base_inteira():
     assert "GRANT INSERT ON events" in sql
     # O papel de ingestão não pode ter SELECT irrestrito em events.
     assert not re.search(r"GRANT SELECT[^;]*\bevents\b[^;]*TO visioncam_ingest", sql)
+
+
+# ── O papel da conexão ─────────────────────────────────────────────
+
+def test_transacao_assume_papel_sem_bypass():
+    """
+    Descoberto no Supabase: `postgres` — o papel da DATABASE_URL — tem
+    rolbypassrls = true. Politicas nao se aplicam a ele.
+
+    Declarar o contexto sem trocar de papel produz isolamento decorativo: as
+    politicas existem, o SET LOCAL roda, e nada disso vale. E o pior resultado
+    possivel, porque parece seguro.
+    """
+    ts = _ler(TENANT)
+    assert "SET LOCAL ROLE" in ts
+    assert "visioncam_app" in ts
+    # A troca tem de vir antes de qualquer consulta do chamador.
+    assert ts.index("SET LOCAL ROLE") < ts.index("trabalho(cliente)")
+
+
+def test_nome_do_papel_nao_vem_de_requisicao():
+    """
+    SET ROLE nao aceita parametro. Um valor externo interpolado ali seria
+    injecao de SQL com troca de privilegio junto.
+    """
+    ts = _ler(TENANT)
+    assert "const PAPEL_DA_APLICACAO = 'visioncam_app'" in ts
+    assert "${PAPEL_DA_APLICACAO}" in ts
+
+
+def test_migracao_cria_o_papel_e_da_associacao_ao_postgres():
+    sql = _ler(SCHEMA)
+    assert "CREATE ROLE visioncam_app NOLOGIN NOBYPASSRLS" in sql
+    assert "GRANT visioncam_app TO postgres" in sql

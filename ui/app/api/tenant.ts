@@ -24,7 +24,26 @@ import { TokenPayload } from './auth/tokens';
  * requisição e é reaproveitada pela próxima — que herdaria a identidade do
  * usuário anterior. Um cliente veria os dados de quem usou a conexão antes.
  * `SET LOCAL` morre no COMMIT, então o vazamento é impossível por construção.
+ *
+ * ## Por que trocar de papel
+ *
+ * Descoberta ao aplicar a migração no Supabase: o papel `postgres`, com o qual
+ * a DATABASE_URL conecta, tem `rolbypassrls = true`. Políticas de RLS não se
+ * aplicam a ele — nenhuma. Declarar o contexto e parar por aí produziria
+ * isolamento decorativo, que é o pior resultado possível: parece seguro,
+ * passa em revisão, e não protege nada.
+ *
+ * `SET LOCAL ROLE visioncam_app` assume, apenas durante a transação, um papel
+ * SEM esse bypass. A conexão continua a mesma; o que muda é quem a transação
+ * diz ser. Isso evita criar uma segunda credencial e trocar a DATABASE_URL —
+ * mais uma peça para desalinhar entre ambientes.
+ *
+ * Verificado no banco: com este papel, um STORE_ADMIN da organização A recebe
+ * zero linhas ao consultar as lojas da organização B.
  */
+
+/** Papel sem BYPASSRLS, criado pela migração multi-tenant. */
+const PAPEL_DA_APLICACAO = 'visioncam_app';
 
 export interface ContextoInquilino {
   userId: number | string;
@@ -56,6 +75,16 @@ export async function comInquilino<T>(
   const cliente = await obterPool().connect();
   try {
     await cliente.query('BEGIN');
+
+    // Precisa vir antes das consultas e depois do BEGIN: SET LOCAL só existe
+    // dentro de transação, e sem ele a conexão segue como `postgres`, que
+    // ignora RLS.
+    //
+    // O nome do papel é constante do código, nunca vem de requisição: SET ROLE
+    // não aceita parâmetro, então um valor externo aqui seria injeção de SQL
+    // com troca de privilégio junto.
+    await cliente.query(`SET LOCAL ROLE ${PAPEL_DA_APLICACAO}`);
+
     // Parametrizado: um userId vindo de token adulterado não pode virar SQL.
     await cliente.query('SELECT set_config($1, $2, true)', [
       'app.user_id',
