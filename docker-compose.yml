@@ -147,7 +147,7 @@ services:
       - DOCKER_PROXY_PORT=2375
       # Aponte para um .nbg para mover a inferência da CPU para a NPU.
       # Ver npu_compilation/ e PROJECT_STATUS.md.
-      - POSE_MODEL_PATH=${POSE_MODEL_PATH:-yolo26n-pose.pt}
+      - POSE_MODEL_PATH=${POSE_MODEL_PATH:-edge/yolov8n-pose.nb}
       - OBJ_MODEL_PATH=${OBJ_MODEL_PATH:-yolo26s.pt}
     volumes:
       - db_data:/app/core/database/data

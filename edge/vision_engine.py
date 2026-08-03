@@ -705,6 +705,10 @@ class VideoCaptureThread(threading.Thread):
                 cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_DSHOW)
             else:
                 cap = cv2.VideoCapture(self.rtsp_url)
+            
+            # Força o buffer do OpenCV para 1 frame para evitar lag de RTSP
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
             if not cap.isOpened():
                 print(f"  [CAM] Falha: {self.rtsp_url}")
                 time.sleep(3); continue
