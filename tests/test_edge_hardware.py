@@ -128,9 +128,20 @@ def test_override_e_yaml_valido_e_mapeia_os_devices():
 
 
 def test_override_so_com_devices_nao_inventa_limite():
+    """
+    Sem perfil de memória, nenhum serviço ganha `mem_limit`. O override só
+    carrega o delta do hardware; inventar um teto aqui sobreporia em silêncio o
+    valor calibrado no compose base.
+
+    A lista de serviços em si não é o invariante — `visioncam-core` passou a
+    receber os devices junto com o Frigate quando a inferência saiu da CPU, e
+    fixar os nomes fazia este teste quebrar a cada serviço novo que precisasse
+    de hardware.
+    """
     doc = yaml.safe_load(hw.montar_override([("/dev/dri", "decode")], {}))
-    assert "mem_limit" not in doc["services"]["frigate"]
-    assert list(doc["services"].keys()) == ["frigate"]
+    for servico, props in doc["services"].items():
+        assert "mem_limit" not in props, f"{servico} ganhou limite sem perfil de memória"
+        assert "devices" in props, f"{servico} entrou no override sem motivo"
 
 
 def test_servicos_do_override_existem_no_compose_base():
