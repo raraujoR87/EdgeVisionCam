@@ -1,1 +1,1 @@
---inputs images --input-size-list 3,320,320 --outputs output0
+--inputs images --input-size-list '3,640,640' --outputs 'output0'

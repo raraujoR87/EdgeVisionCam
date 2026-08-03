@@ -828,21 +828,25 @@ class DetectionAgentThread(threading.Thread):
         pose_model_path = os.getenv("POSE_MODEL_PATH", "yolo26n-pose.pt")
         obj_model_path = os.getenv("OBJ_MODEL_PATH", "yolo26s.pt")
 
-        def load_model(path):
+        def load_model(path, is_pose=False):
             if path.endswith(('.nb', '.nbg')):
-                from edge.vivante_pose_engine import VivantePoseEngine
-                return VivantePoseEngine(path)
+                if is_pose:
+                    from edge.vivante_pose_engine import VivantePoseEngine
+                    return VivantePoseEngine(path)
+                else:
+                    from edge.vivante_detect_engine import VivanteDetectEngine
+                    return VivanteDetectEngine(path, input_size=640)
             else:
                 from ultralytics import YOLO
                 return YOLO(path)
 
         print(f"  [V6] [DETECT-AGENT] Carregando modelo pose: {pose_model_path}...")
-        model_pose = load_model(pose_model_path)
+        model_pose = load_model(pose_model_path, is_pose=True)
         print(f"  [V6] [DETECT-AGENT] Pose carregado em {time.time()-t0:.1f}s")
 
         t1 = time.time()
         print(f"  [V6] [DETECT-AGENT] Carregando modelo objetos: {obj_model_path}...")
-        model_obj = load_model(obj_model_path)
+        model_obj = load_model(obj_model_path, is_pose=False)
         print(f"  [V6] [DETECT-AGENT] Objetos carregado em {time.time()-t1:.1f}s")
 
         # ── WARMUP: first inference is always slow (JIT/CUDA compilation) ──
@@ -1061,7 +1065,7 @@ async def behavior_task():
             if now - last_sync > 2.0:
                 try:
                     db = await get_system_db()
-                    async with db.execute("SELECT points_json FROM zones WHERE is_active = 1") as cur:
+                    async with db.execute("SELECT points_json FROM zones WHERE is_active = 1 AND camera_name = ?", (current_camera_name,)) as cur:
                         rows = await cur.fetchall()
                         active_zones = [
                             np.array([[round(p['x']), round(p['y'])]
@@ -1069,7 +1073,7 @@ async def behavior_task():
                             for r in rows]
                     await db.close()
                     last_sync = now
-                except:
+                except Exception as e:
                     pass
 
             # Evitar inflação da fila se houver gargalo temporário
@@ -1265,18 +1269,20 @@ async def inference_task():
 
 async def fetch_rtsp_url():
     url = 0
+    cam_name = 'camera_principal'
     try:
         db = await get_system_db()
         # Tenta a nova modelagem de multi-cameras primeiro
         try:
-            async with db.execute("SELECT rtsp_url FROM cameras WHERE is_active = 1 LIMIT 1") as cur:
+            async with db.execute("SELECT name, rtsp_url FROM cameras WHERE is_active = 1 ORDER BY id DESC LIMIT 1") as cur:
                 row = await cur.fetchone()
                 if row and row['rtsp_url']:
                     url = row['rtsp_url']
+                    cam_name = row['name']
                     if isinstance(url, str) and url.isdigit():
                         url = int(url)
                     await db.close()
-                    return url
+                    return url, cam_name
         except Exception as e:
             pass
 
@@ -1290,32 +1296,37 @@ async def fetch_rtsp_url():
         await db.close()
     except:
         pass
-    return url
+    return url, cam_name
 
+
+current_camera_name = 'camera_principal'
 
 async def main():
+    global current_camera_name
     print("\n" + "="*60)
     print("  VISIONCAM LOSS PREVENTION V6.1")
     print("  YOLO26 (96% detection) + Scene Tracking + Gemini")
     print("  Pegou -> Acompanha na Cena -> Sumiu 20s -> Gemini")
     print("="*60)
-    rtsp = await fetch_rtsp_url()
-    print(f"  [*] Stream: {rtsp}")
+    rtsp, current_camera_name = await fetch_rtsp_url()
+    print(f"  [*] Stream: {rtsp} (Camera: {current_camera_name})")
     video_thread = VideoCaptureThread(rtsp)
     video_thread.start()
 
     async def monitor_rtsp():
+        global current_camera_name
         nonlocal video_thread
         while True:
             await asyncio.sleep(5)
             try:
-                new_rtsp = await fetch_rtsp_url()
+                new_rtsp, new_cam_name = await fetch_rtsp_url()
                 if new_rtsp != video_thread.rtsp_url:
                     print(f"  [*] RTSP URL alterada. Reiniciando captura: {video_thread.rtsp_url} -> {new_rtsp}")
                     video_thread.running = False
                     await asyncio.sleep(1.5)
                     video_thread = VideoCaptureThread(new_rtsp)
                     video_thread.start()
+                    current_camera_name = new_cam_name
             except Exception as e:
                 print(f"  [CAM MONITOR] Erro ao verificar mudanca de camera: {e}")
 
