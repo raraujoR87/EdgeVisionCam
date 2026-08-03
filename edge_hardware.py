@@ -118,20 +118,39 @@ def montar_override(devices, limites):
     Devolver vazio importa: um arquivo de override sem conteúdo útil só
     confunde quem for depurar o appliance depois.
     """
-    frigate = []
+    frigate_props = []
+    core_props = []
     if devices:
-        frigate.append("    devices:")
+        frigate_props.append("    devices:")
+        core_props.append("    devices:")
         for caminho, descricao in devices:
-            frigate.append(f"      - {caminho}:{caminho}   # {descricao}")
+            dev_str = f"      - {caminho}:{caminho}   # {descricao}"
+            frigate_props.append(dev_str)
+            core_props.append(dev_str)
+            
+        # Adicionar volume do SDK da NPU se for VIPCore
+        if any(d[0] == NPU_DEVICE for d in devices):
+            core_props.append("    volumes:")
+            core_props.append("      - /usr/local/lib/viplite:/opt/ai-sdk/lib:ro")
+            core_props.append("    environment:")
+            core_props.append("      - VIPLITE_LIB_DIR=/opt/ai-sdk/lib")
+            core_props.append("      - LD_LIBRARY_PATH=/opt/ai-sdk/lib")
+
     if "frigate" in limites:
-        frigate.append(f"    mem_limit: {limites['frigate']}")
+        frigate_props.append(f"    mem_limit: {limites['frigate']}")
 
     blocos = []
-    if frigate:
-        blocos.append("  frigate:\n" + "\n".join(frigate))
+    if frigate_props:
+        blocos.append("  frigate:\n" + "\n".join(frigate_props))
+        
     for servico in ("visioncam-core", "visioncam-ui"):
+        props = []
+        if servico == "visioncam-core" and core_props:
+            props.extend(core_props)
         if servico in limites:
-            blocos.append(f"  {servico}:\n    mem_limit: {limites[servico]}")
+            props.append(f"    mem_limit: {limites[servico]}")
+        if props:
+            blocos.append(f"  {servico}:\n" + "\n".join(props))
 
     if not blocos:
         return ""
