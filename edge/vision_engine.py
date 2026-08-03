@@ -1270,7 +1270,7 @@ async def fetch_rtsp_url():
         db = await get_system_db()
         # Tenta a nova modelagem de multi-cameras primeiro
         try:
-            async with db.execute("SELECT name, rtsp_url FROM cameras WHERE is_active = 1 LIMIT 1") as cur:
+            async with db.execute("SELECT name, rtsp_url FROM cameras WHERE is_active = 1 ORDER BY id DESC LIMIT 1") as cur:
                 row = await cur.fetchone()
                 if row and row['rtsp_url']:
                     url = row['rtsp_url']
