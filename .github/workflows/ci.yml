@@ -57,6 +57,44 @@ jobs:
       - name: Build
         run: npm run build
 
+  isolamento:
+    name: Isolamento entre inquilinos (Postgres real)
+    runs-on: ubuntu-latest
+    # Este job existe porque os demais testes de isolamento leem codigo-fonte.
+    # Eles travam que as rotas nao carregam o filtro no corpo — util, mas nao
+    # prova que o cliente A nao ve o B. So um Postgres com RLS ativa prova.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: visioncam_teste
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: pip install pytest psycopg2-binary
+
+      - name: Executar
+        env:
+          # O usuario `postgres` do container tem BYPASSRLS, igual a producao.
+          # E proposital: o teste precisa exercitar exatamente o caminho real,
+          # incluindo o SET LOCAL ROLE que torna a RLS efetiva. Rodar com um
+          # papel ja restrito esconderia justamente o defeito que quase passou.
+          DATABASE_URL_TESTE: postgres://postgres:postgres@localhost:5432/visioncam_teste
+        run: pytest tests/integracao/ -v
+
   seguranca:
     name: Varredura de segredos
     runs-on: ubuntu-latest
