@@ -828,21 +828,25 @@ class DetectionAgentThread(threading.Thread):
         pose_model_path = os.getenv("POSE_MODEL_PATH", "yolo26n-pose.pt")
         obj_model_path = os.getenv("OBJ_MODEL_PATH", "yolo26s.pt")
 
-        def load_model(path):
+        def load_model(path, is_pose=False):
             if path.endswith(('.nb', '.nbg')):
-                from edge.vivante_pose_engine import VivantePoseEngine
-                return VivantePoseEngine(path)
+                if is_pose:
+                    from edge.vivante_pose_engine import VivantePoseEngine
+                    return VivantePoseEngine(path)
+                else:
+                    from edge.vivante_detect_engine import VivanteDetectEngine
+                    return VivanteDetectEngine(path, input_size=640)
             else:
                 from ultralytics import YOLO
                 return YOLO(path)
 
         print(f"  [V6] [DETECT-AGENT] Carregando modelo pose: {pose_model_path}...")
-        model_pose = load_model(pose_model_path)
+        model_pose = load_model(pose_model_path, is_pose=True)
         print(f"  [V6] [DETECT-AGENT] Pose carregado em {time.time()-t0:.1f}s")
 
         t1 = time.time()
         print(f"  [V6] [DETECT-AGENT] Carregando modelo objetos: {obj_model_path}...")
-        model_obj = load_model(obj_model_path)
+        model_obj = load_model(obj_model_path, is_pose=False)
         print(f"  [V6] [DETECT-AGENT] Objetos carregado em {time.time()-t1:.1f}s")
 
         # ── WARMUP: first inference is always slow (JIT/CUDA compilation) ──

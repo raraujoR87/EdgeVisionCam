@@ -270,7 +270,7 @@ $PEGASUS export ovxlib \
     --target-ide-project linux64 \
     --optimize         "$OPTIMIZE" \
     --viv-sdk          "$VIV_SDK" \
-    --pack-nbg-viplite \
+    --pack-nbg-unify \
     --with-input-meta  "${MODELO}_inputmeta.yml" \
     --postprocess-file "${MODELO}_postprocess_file.yml" \
     --output-path      "${SAIDA}/${MODELO}_${POSTFIX}"
