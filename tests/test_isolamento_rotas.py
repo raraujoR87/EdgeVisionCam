@@ -20,7 +20,13 @@ API = os.path.join(RAIZ, "ui", "app", "api")
 # Rotas que servem dado pertencente a cliente e são acessadas por sessão de
 # usuário. Ingestão (telemetry/webhook) e provisionamento usam outra credencial
 # e estão fora deste conjunto de propósito.
-ROTAS_DE_INQUILINO = ["stores/route.ts", "users/route.ts", "analytics/route.ts"]
+ROTAS_DE_INQUILINO = [
+    "stores/route.ts",
+    "users/route.ts",
+    "analytics/route.ts",
+    "organizations/route.ts",
+    "audit/route.ts",
+]
 
 
 def _ler(caminho):
@@ -232,3 +238,50 @@ def test_auditoria_nao_derruba_a_operacao():
     conteudo = _ler("provisioning/route.ts")
     assert "Falha ao auditar emissao" in conteudo
     assert re.search(r"catch \(erroAuditoria\)", conteudo)
+
+
+# ── Organizações e auditoria ───────────────────────────────────────
+
+def test_limites_do_plano_nao_vem_da_requisicao():
+    """
+    Aceitar max_stores do corpo permitiria a quem alcançasse a rota comprar um
+    upgrade sem passar pelo comercial. Os limites saem da tabela de planos.
+    """
+    conteudo = _ler("organizations/route.ts")
+    assert "PLANOS[planoEscolhido]" in conteudo
+    assert "limites?.max_stores" in conteudo
+    corpo = re.search(r"export async function PUT[\s\S]*", conteudo).group(0)
+    assert "max_stores" not in re.search(r"const \{ id, name, plan, status \}", corpo).group(0)
+
+
+def test_suspensao_tem_acao_propria_na_trilha():
+    """
+    Suspensão é evento comercial. Quem audita depois procura por ela, não por
+    "organization.update".
+    """
+    conteudo = _ler("organizations/route.ts")
+    assert "organization.${status}" in conteudo
+
+
+def test_auditoria_e_somente_leitura():
+    """
+    Trilha alterável pela aplicação não serve como trilha: a primeira coisa que
+    alguém faria ao abusar do sistema seria apagar o próprio rastro.
+    """
+    conteudo = _ler("audit/route.ts")
+    for metodo in ("POST", "PUT", "PATCH", "DELETE"):
+        assert f"export async function {metodo}" not in conteudo, \
+            f"audit expõe {metodo}"
+
+
+def test_auditoria_tem_teto_de_paginacao():
+    """`?limit=999999` viraria varredura que trava o banco de todos."""
+    conteudo = _ler("audit/route.ts")
+    assert "LIMITE_MAXIMO" in conteudo
+    assert "Math.min(" in conteudo
+
+
+def test_auditoria_restrita_a_quem_administra():
+    conteudo = _ler("audit/route.ts")
+    assert "ehSuperAdmin(sessao.role)" in conteudo
+    assert "STORE_ADMIN" in conteudo
