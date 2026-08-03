@@ -79,7 +79,8 @@ export async function GET(request: Request) {
           SELECT u.id, u.email, u.is_super_admin, u.created_at,
                  COALESCE(
                    json_agg(
-                     json_build_object('organization_id', m.organization_id,
+                     json_build_object('membership_id', m.id,
+                                       'organization_id', m.organization_id,
                                        'organization_name', o.name,
                                        'role', m.role,
                                        'store_id', m.store_id)
@@ -98,8 +99,11 @@ export async function GET(request: Request) {
       // é filtrado pela RLS em `memberships`, então não há como alcançar a
       // associação de uma organização alheia mesmo forjando o id.
       const res = await cliente.query(
+        // m.id vai junto: é a chave que o DELETE exige, e sem ela a tela de
+        // equipe lista pessoas que não consegue remover.
         `SELECT u.id, u.email, u.created_at,
-                m.role, m.organization_id, m.store_id, o.name AS organization_name
+                m.id AS membership_id, m.role, m.organization_id, m.store_id,
+                o.name AS organization_name
            FROM memberships m
            JOIN users u ON u.id = m.user_id
            LEFT JOIN organizations o ON o.id = m.organization_id
@@ -241,6 +245,104 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'E-mail já cadastrado.' }, { status: 409 });
     }
     return NextResponse.json({ error: 'Falha ao criar usuário.' }, { status: 500 });
+  }
+}
+
+/**
+ * PATCH — muda o papel de um membro dentro da organização.
+ *
+ * Promover alguém a administrador e rebaixar quem mudou de função são as duas
+ * operações mais comuns de gestão de equipe. Sem elas, a única saída era
+ * remover e convidar de novo — o que apaga o vínculo e, com ele, a explicação
+ * de por que a pessoa tinha acesso.
+ */
+export async function PATCH(request: Request) {
+  const sessao = extrairSessao(request);
+  if (!sessao) {
+    return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 });
+  }
+
+  const superAdmin = ehSuperAdmin(sessao.role);
+  if (!superAdmin && sessao.role !== STORE_ADMIN) {
+    return NextResponse.json({ error: 'Acesso negado.' }, { status: 403 });
+  }
+
+  let corpo: any;
+  try {
+    corpo = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Corpo inválido.' }, { status: 400 });
+  }
+
+  const { membership_id, role } = corpo;
+  if (!membership_id || !papelDeOrganizacaoValido(role)) {
+    return NextResponse.json(
+      { error: `membership_id e um role válido são obrigatórios (${PAPEIS_DE_ORGANIZACAO.join(', ')}).` },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const resultado = await comInquilino(contextoDoToken(sessao), async (cliente) => {
+      const alvo = await cliente.query(
+        `SELECT m.id, m.organization_id, m.role, u.email
+           FROM memberships m JOIN users u ON u.id = m.user_id
+          WHERE m.id = $1`,
+        [membership_id],
+      );
+      if (!alvo.rowCount) {
+        return { erro: 'Associação não encontrada.', status: 404 };
+      }
+
+      const orgId = Number(alvo.rows[0].organization_id);
+      if (!superAdmin) {
+        const minhas = await orgsQueAdministra(cliente, sessao.id ?? 0);
+        // 404 e não 403: confirmar que a associação existe já diria a um
+        // administrador de outra rede quais ids são válidos.
+        if (!minhas.includes(orgId)) {
+          return { erro: 'Associação não encontrada.', status: 404 };
+        }
+      }
+
+      // Mesmo motivo do DELETE: rebaixar o último administrador deixa a
+      // organização sem ninguém capaz de convidar equipe.
+      if (alvo.rows[0].role === STORE_ADMIN && role !== STORE_ADMIN) {
+        const restantes = await cliente.query(
+          `SELECT COUNT(*)::int AS n FROM memberships
+            WHERE organization_id = $1 AND role = 'STORE_ADMIN' AND id <> $2`,
+          [orgId, membership_id],
+        );
+        if (restantes.rows[0].n === 0) {
+          return {
+            erro: 'Esta é a última administração da organização. Promova outro usuário antes.',
+            status: 409,
+          };
+        }
+      }
+
+      await cliente.query('UPDATE memberships SET role = $2 WHERE id = $1', [membership_id, role]);
+
+      await registrarAuditoria(cliente, {
+        organizationId: orgId,
+        userId: sessao.id,
+        actorEmail: sessao.email,
+        action: 'membership.role_change',
+        resourceType: 'membership',
+        resourceId: membership_id,
+        detail: { email: alvo.rows[0].email, de: alvo.rows[0].role, para: role },
+        ipAddress: ipDaRequisicao(request),
+      });
+
+      return { ok: true };
+    });
+
+    if ('erro' in resultado) {
+      return NextResponse.json({ error: resultado.erro }, { status: resultado.status });
+    }
+    return NextResponse.json({ success: true });
+  } catch (erro: any) {
+    console.error('[users PATCH]', erro);
+    return NextResponse.json({ error: 'Falha ao alterar o papel.' }, { status: 500 });
   }
 }
 

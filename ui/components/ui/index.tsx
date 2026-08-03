@@ -278,7 +278,74 @@ export function Indicador({ rotulo, valor, sufixo, tom = 'neutro', Icone, nota }
   );
 }
 
+// ── Gráfico de barras ──────────────────────────────────────────────
+// Deliberadamente sem biblioteca de gráficos. Recharts e afins pesam mais de
+// 100 kB para desenhar o que aqui são divs com altura proporcional, e todo
+// gráfico deste produto é uma série pequena de contagens.
+
+export function Barras({ dados, altura = 120, formatarRotulo }: {
+  dados: { rotulo: string; valor: number; destaque?: number }[];
+  altura?: number;
+  formatarRotulo?: (r: string) => string;
+}) {
+  // Piso de 1 evita divisão por zero e, mais importante, evita que um período
+  // inteiro de zeros vire barras de altura cheia.
+  const maximo = Math.max(1, ...dados.map((d) => d.valor));
+
+  return (
+    <div className="flex items-end gap-[3px]" style={{ height: altura }}>
+      {dados.map((d, i) => {
+        const proporcao = d.valor / maximo;
+        const destaque = d.destaque ?? 0;
+        return (
+          <div
+            key={i}
+            className="flex-1 min-w-[3px] h-full flex flex-col justify-end group relative"
+            title={`${formatarRotulo ? formatarRotulo(d.rotulo) : d.rotulo}: ${d.valor}`}
+          >
+            {/* Barra de fundo com 2px mesmo em zero: sem isto, um dia sem
+                eventos some do eixo e o buraco parece falha de renderização. */}
+            <div
+              className="w-full bg-sky-600/70 group-hover:bg-sky-500 rounded-sm transition-colors relative"
+              style={{ height: `${Math.max(proporcao * 100, d.valor === 0 ? 1.5 : 4)}%` }}
+            >
+              {destaque > 0 && (
+                <div
+                  className="absolute bottom-0 left-0 right-0 bg-red-500/80 rounded-sm"
+                  style={{ height: `${Math.min((destaque / Math.max(d.valor, 1)) * 100, 100)}%` }}
+                />
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Utilitários ────────────────────────────────────────────────────
+
+/** Data legível em pt-BR. Repetida em cada tela antes disto. */
+export function quando(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('pt-BR', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+/** "há 4 min" — o formato que responde "isto é recente?" sem fazer conta. */
+export function faz(iso: string | null | undefined): string {
+  if (!iso) return 'nunca';
+  const segundos = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (segundos < 60) return 'agora';
+  const minutos = Math.floor(segundos / 60);
+  if (minutos < 60) return `há ${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `há ${horas} h`;
+  const dias = Math.floor(horas / 24);
+  return `há ${dias} d`;
+}
+
 
 export function tokenLocal(): string {
   return (typeof window !== 'undefined' && localStorage.getItem('admin_token')) || '';

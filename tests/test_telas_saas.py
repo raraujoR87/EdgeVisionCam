@@ -33,16 +33,25 @@ def test_paginas_estao_na_navegacao():
         assert f'href="/dashboard/{pagina}"' in layout, f"{pagina} não está no menu"
 
 
-def test_paginas_entram_no_guarda_de_rota():
+def test_guarda_de_rota_nega_por_padrao():
     """
-    O guarda lista as páginas de admin uma a uma. Uma página nova fora da lista
-    é alcançável por um STORE_VIEWER que digite a URL — o menu não a mostra,
-    mas o menu não é controle de acesso.
+    O guarda enumerava os caminhos proibidos ao cliente, um a um. O modo de
+    falha era abrir demais: bastava alguém criar uma tela de fornecedor e
+    esquecer de acrescentá-la à lista para ela ficar alcançável por quem
+    digitasse a URL.
+
+    A regra agora é a inversa — quem não é fornecedor vive em /console, e
+    qualquer outro caminho o traz de volta. Uma tela nova nasce fora do alcance
+    dele sem ninguém precisar lembrar de nada.
+
+    Este teste trava a inversão: se a lista voltar, ele quebra.
     """
     layout = _ler("client-layout.tsx")
-    guarda = re.search(r"isTryingToAccessAdminPages\s*=\s*([^\n]+)", layout).group(1)
-    for pagina in PAGINAS_DE_ADMIN:
-        assert f"/dashboard/{pagina}" in guarda, f"{pagina} fora do guarda de rota"
+    assert "isTryingToAccessAdminPages" not in layout, \
+        "o guarda voltou a enumerar caminhos proibidos"
+    assert re.search(r"!ehFornecedor && !isConsolePage", layout), \
+        "o guarda deixou de mandar o cliente para /console"
+    assert "window.location.href = '/console'" in layout
 
 
 def test_auditoria_nao_oferece_como_apagar():

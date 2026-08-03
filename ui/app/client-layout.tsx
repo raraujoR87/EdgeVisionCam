@@ -1,7 +1,7 @@
 "use client"
 import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server, Store, HardDrive, BarChart3, Users, Cog, Building2, ScrollText } from 'lucide-react'
+import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, Server, Store, BarChart3, Building2, ScrollText } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { getApiUrl } from './utils/api'
 
@@ -16,7 +16,11 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   const isLoginPage = pathname === '/login'
   // Telas que se desenham sozinhas, fora do chrome do console.
   const isChangePasswordPage = pathname === '/change-password'
-  const isStandalonePage = isLoginPage || isChangePasswordPage
+  // O console do cliente traz o próprio chrome (navegação, seletor de
+  // organização, barra inferior no celular). Empilhar as duas barras laterais
+  // sobraria 100px de conteúdo no notebook.
+  const isConsolePage = pathname.startsWith('/console')
+  const isStandalonePage = isLoginPage || isChangePasswordPage || isConsolePage
   const [user, setUser] = useState<UserSession | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -73,22 +77,28 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
     }
   }, [pathname, isLoginPage, isChangePasswordPage])
 
-  // Redirecionamento de segurança para Clientes
+  // Encaminhamento por perfil.
+  //
+  // A versão anterior mantinha uma lista escrita à mão dos caminhos proibidos
+  // ao cliente. Toda tela nova do fornecedor precisava ser lembrada nessa
+  // lista, e uma esquecida ficava acessível — o modo de falha era abrir demais.
+  //
+  // Aqui a regra é invertida: quem é cliente vive em /console, e qualquer outro
+  // caminho o traz de volta. Uma tela nova do fornecedor nasce fora do alcance
+  // dele sem ninguém precisar lembrar de nada.
   useEffect(() => {
-    if (user && ['client', 'STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER'].includes(user.role)) {
-      const isTryingToAccessAdminPages = pathname === '/' || pathname === '/setup' || pathname === '/settings' || pathname === '/dashboard' || pathname === '/dashboard/stores' || pathname === '/dashboard/appliances' || pathname === '/dashboard/deploys' || pathname === '/dashboard/organizations' || pathname === '/dashboard/audit';
-      
-      if (isTryingToAccessAdminPages) {
-        window.location.href = '/dashboard/events'
-      }
+    if (!user) return
+
+    const ehFornecedor = ['admin', 'SUPER_ADMIN'].includes(user.role)
+
+    if (!ehFornecedor && !isConsolePage) {
+      window.location.href = '/console'
+      return
     }
-    
-    if (user && ['admin', 'SUPER_ADMIN'].includes(user.role)) {
-      if (pathname === '/') {
-        window.location.href = '/dashboard'
-      }
+    if (ehFornecedor && pathname === '/') {
+      window.location.href = '/dashboard'
     }
-  }, [user, pathname])
+  }, [user, pathname, isConsolePage])
 
   const handleLogout = () => {
     localStorage.removeItem('admin_token')
@@ -107,8 +117,6 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   if (isStandalonePage) {
     return <>{children}</>
   }
-
-  const isClient = user?.role === 'client'
 
   return (
     <div className="pl-64 min-h-screen bg-slate-950 text-slate-100">
@@ -144,35 +152,16 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 <Shield size={20} />
                 <span className="font-medium">Eventos</span>
               </Link>
-            </>
-          ) : user && ['STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER', 'client'].includes(user.role) && isCloudMode ? (
-            // Sidebar para Clientes (Painel BI e Gestão da Loja)
-            <>
               <Link href="/dashboard/audit" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/audit' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <ScrollText size={20} />
                 <span className="font-medium">Auditoria</span>
               </Link>
-              <Link href="/dashboard/analytics" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/analytics' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+              {/* O fornecedor precisa conseguir ver o produto como o cliente vê
+                  — é onde se reproduz o que o cliente relata no suporte. */}
+              <Link href="/console" className="flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-800 hover:text-sky-300 transition-colors mt-2 border-t border-slate-800/60 pt-4">
                 <BarChart3 size={20} />
-                <span className="font-medium">BI & Analytics</span>
+                <span className="font-medium">Console do cliente</span>
               </Link>
-              <Link href="/dashboard/events" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/events' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                <Shield size={20} />
-                <span className="font-medium">Monitoramento</span>
-              </Link>
-              
-              {user.role === 'STORE_ADMIN' && (
-                <>
-                  <Link href="/dashboard/team" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/team' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                    <Users size={20} />
-                    <span className="font-medium">Minha Equipe</span>
-                  </Link>
-                  <Link href="/dashboard/settings" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/settings' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
-                    <Cog size={20} />
-                    <span className="font-medium">Regras & IA</span>
-                  </Link>
-                </>
-              )}
             </>
           ) : !isCloudMode ? (
             // Sidebar para Técnico Local (Borda)
@@ -200,7 +189,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         </div>
 
         <div className="p-4 text-xs font-mono text-slate-600 text-center border-t border-slate-800/60 font-semibold">
-          {isClient ? `Cliente: ${user?.email}` : isCloudMode ? "Cloud Console Online" : "Edge Node Online"}
+          {isCloudMode ? "Console do fornecedor" : "Edge Node Online"}
         </div>
       </aside>
 

@@ -1,6 +1,6 @@
 import { PoolClient } from 'pg';
 import { obterPool } from './db';
-import { TokenPayload } from './auth/tokens';
+import { TokenPayload, verifyToken } from './auth/tokens';
 
 /**
  * Contexto de inquilino para consultas ao banco.
@@ -49,6 +49,22 @@ export interface ContextoInquilino {
   userId: number | string;
   isSuperAdmin: boolean;
   email?: string;
+}
+
+/**
+ * Extrai a sessão do cabeçalho Authorization.
+ *
+ * Estava copiada em cada rota. Cópia de código de autenticação é como um
+ * caminho fica mais permissivo que os outros sem ninguém notar.
+ */
+export function sessaoDaRequisicao(request: Request): TokenPayload | null {
+  const header = request.headers.get('Authorization') || '';
+  if (!header.startsWith('Bearer ')) return null;
+  try {
+    return verifyToken(header.slice(7).trim());
+  } catch {
+    return null;
+  }
 }
 
 export function contextoDoToken(payload: TokenPayload): ContextoInquilino {
