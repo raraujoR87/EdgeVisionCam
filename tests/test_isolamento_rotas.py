@@ -330,3 +330,64 @@ def test_route_ts_so_exporta_o_que_o_next_aceita():
         "Exports que o Next.js recusa em route.ts (mova para um módulo ao lado):\n  "
         + "\n  ".join(problemas)
     )
+
+
+# ── Limites do plano na ingestão ───────────────────────────────────
+
+def test_ingestao_verifica_estado_comercial():
+    """
+    O limite era conferido só quando alguém criava loja pelo painel. O
+    appliance autentica por x-store-api-key e esse caminho não consultava nada:
+    um cliente em trial ligava dez appliances por fora e consumia banco e banda.
+
+    O teto existia na tela e não no lugar onde o custo acontece.
+    """
+    conteudo = _ler("telemetry/route.ts")
+    assert "max_appliances" in conteudo
+    assert "o.status !== 'ativa'" in conteudo or "status !== 'ativa'" in conteudo
+
+
+def test_organizacao_suspensa_responde_402():
+    """
+    402 e não 403: o problema é de pagamento, não de permissão. O appliance usa
+    o código para decidir se tenta de novo depois ou para de vez.
+    """
+    conteudo = _ler("telemetry/route.ts")
+    assert "{ status: 402 }" in conteudo
+
+
+def test_auto_registro_respeita_o_teto():
+    """
+    O fallback legado criava appliance sem conferir limite. Era o caminho mais
+    barato de burlar a cobrança: a chave da loja registrava sem parar.
+    """
+    conteudo = _ler("telemetry/route.ts")
+    corpo = conteudo[: conteudo.index("INSERT INTO appliances")]
+    assert "atuais >= " in corpo, "auto-registro não confere o teto antes de inserir"
+
+
+# ── Paginação ──────────────────────────────────────────────────────
+
+def test_listagens_grandes_sao_paginadas():
+    """
+    Trazer tudo sempre não incomoda com uma loja. É o defeito que aparece
+    exatamente quando o negócio começa a dar certo.
+    """
+    for rota in ("stores/route.ts", "audit/route.ts"):
+        conteudo = _ler(rota)
+        assert "LIMIT" in conteudo and "OFFSET" in conteudo, f"{rota} sem paginação"
+        assert "LIMITE_MAXIMO" in conteudo, f"{rota} sem teto de limite"
+
+
+def test_teto_de_paginacao_e_aplicado():
+    """`?limit=999999` viraria varredura, e o custo de um cliente recai sobre
+    todos os outros."""
+    conteudo = _ler("stores/route.ts")
+    assert re.search(r"Math\.min\(Math\.max\(bruto, 1\), LIMITE_MAXIMO\)", conteudo)
+
+
+def test_resposta_paginada_traz_o_total():
+    """Sem o total, a UI não sabe quantas páginas existem e a paginação vira
+    adivinhação."""
+    conteudo = _ler("stores/route.ts")
+    assert "total: total.rows[0].n" in conteudo

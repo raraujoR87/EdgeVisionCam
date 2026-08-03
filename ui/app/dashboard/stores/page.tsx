@@ -3,13 +3,23 @@ import React, { useState } from 'react';
 import useSWR from 'swr';
 import { Store, Plus, MapPin, Key, MessageSquare, Loader2, Trash2, Pencil, X, HardDrive, ShieldAlert } from 'lucide-react';
 
-const fetcher = (url: string) => {
-  const token = localStorage.getItem('admin_token');
-  return fetch(url, { headers: { 'Authorization': `Bearer ${token}` } }).then(res => res.json());
-};
+import { Busca, Paginacao, Carregando, Erro as ErroUI, Vazio, buscar } from '../../../components/ui';
+
+const POR_PAGINA = 20;
 
 export default function StoresManagementPage() {
-  const { data: stores, error, mutate } = useSWR('/api/stores', fetcher);
+  const [termo, setTermo] = useState('');
+  const [pagina, setPagina] = useState(0);
+
+  // A API passou a paginar e devolver envelope { lojas, total }. Consumir array
+  // cru aqui deixaria a tela vazia sem erro visivel.
+  const { data, error, mutate, isLoading } = useSWR(
+    `/api/stores?limit=${POR_PAGINA}&offset=${pagina * POR_PAGINA}` +
+      (termo ? `&q=${encodeURIComponent(termo)}` : ''),
+    buscar,
+  );
+  const stores = data?.lojas ?? [];
+  const total = data?.total ?? 0;
   
   const [isCreating, setIsCreating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -91,9 +101,9 @@ export default function StoresManagementPage() {
     });
   };
 
-  if (error) return <div className="text-rose-500 p-8">Erro ao carregar lojas: {error?.message || 'Verifique sua conexão.'}</div>;
-  if (!stores) return <div className="p-8 flex items-center gap-2 text-slate-400"><Loader2 className="animate-spin" /> Carregando lojas...</div>;
-  if (stores.error) return <div className="text-rose-500 p-8">{stores.error}</div>;
+  // Erro e carga usam as primitivas: antes cada tela pintava seu proprio
+  // spinner e sua propria caixa vermelha, e nenhuma parecia com a outra.
+  if (error) return <div className="p-8"><ErroUI mensagem={error.message} aoTentarNovamente={() => mutate()} /></div>;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -149,8 +159,22 @@ export default function StoresManagementPage() {
         </div>
       )}
 
+      <div className="flex items-center gap-3">
+        <Busca valor={termo} aoMudar={(v) => { setTermo(v); setPagina(0); }} placeholder="Buscar loja…" />
+      </div>
+
+      {isLoading && <Carregando linhas={3} />}
+
+      {!isLoading && stores.length === 0 && (
+        <Vazio
+          Icone={Store}
+          titulo={termo ? 'Nenhuma loja corresponde à busca' : 'Nenhuma loja cadastrada'}
+          descricao={termo ? `Sem resultados para “${termo}”.` : 'Cadastre a primeira loja de um cliente.'}
+        />
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {Array.isArray(stores) && stores.map((store: any) => (
+        {stores.map((store: any) => (
           <div key={store.id} className="bg-slate-900/60 border border-slate-800/80 p-6 rounded-2xl backdrop-blur-md hover:border-slate-600 transition-colors group">
             {editingId === store.id ? (
               /* Modo edição */
@@ -224,6 +248,7 @@ export default function StoresManagementPage() {
           <p className="text-sm mt-1">Clique em "Nova Loja" para começar.</p>
         </div>
       )}
+    <Paginacao pagina={pagina} porPagina={POR_PAGINA} total={total} aoMudar={setPagina} />
     </div>
   );
 }

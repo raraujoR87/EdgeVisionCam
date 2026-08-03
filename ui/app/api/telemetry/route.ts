@@ -41,9 +41,66 @@ export async function POST(request: Request) {
       
       storeId = storeRes.rows[0].id;
       // Auto-migrar: criar um appliance legado para essa loja
+      // Auto-registro so ate o teto do plano: sem isto, a chave da loja
+      // registra appliances sem limite, que e o caminho mais barato de burlar
+      // a cobranca.
+      const cabe = await query(
+        `SELECT o.max_appliances,
+                (SELECT COUNT(*)::int FROM appliances a2
+                   JOIN stores s2 ON s2.id = a2.store_id
+                  WHERE s2.organization_id = o.id) AS atuais
+           FROM stores s JOIN organizations o ON o.id = s.organization_id
+          WHERE s.id = $1`,
+        [storeId],
+      );
+      if (cabe.rowCount && cabe.rows[0].atuais >= cabe.rows[0].max_appliances) {
+        return NextResponse.json(
+          { error: `Limite do plano atingido: ${cabe.rows[0].atuais}/${cabe.rows[0].max_appliances} appliances.` },
+          { status: 402 },
+        );
+      }
       const newDev = await query("INSERT INTO appliances (store_id, label, edge_key, status) VALUES ($1, $2, $3, 'ATIVO') RETURNING id", [storeId, 'Appliance Legado ' + storeId, apiKey]);
       applianceId = newDev.rows[0].id;
       deviceName = 'Appliance Legado ' + storeId;
+    }
+
+    // 1b. Estado comercial da organizacao dona da loja.
+    //
+    // O limite do plano era verificado apenas quando alguem criava loja pelo
+    // painel. Este caminho — appliance autenticando por x-store-api-key — nao
+    // consultava nada, entao um cliente em trial podia ligar dez appliances por
+    // fora e consumir banco e banda indefinidamente. O teto existia na tela e
+    // nao no lugar onde o custo acontece.
+    const comercial = await query(
+      `SELECT o.id, o.status, o.max_appliances,
+              (SELECT COUNT(*)::int FROM appliances a2
+                 JOIN stores s2 ON s2.id = a2.store_id
+                WHERE s2.organization_id = o.id) AS appliances_atuais
+         FROM stores s JOIN organizations o ON o.id = s.organization_id
+        WHERE s.id = $1`,
+      [storeId],
+    );
+
+    if (comercial.rowCount) {
+      const org = comercial.rows[0];
+
+      // 402 e nao 403: o problema e de pagamento, nao de permissao. O appliance
+      // usa o codigo para decidir se tenta de novo mais tarde ou para de vez.
+      if (org.status !== 'ativa') {
+        return NextResponse.json(
+          { error: 'Organizacao suspensa. Regularize para retomar o envio.' },
+          { status: 402 },
+        );
+      }
+
+      // Conta apenas appliances ja registrados. Um que exceda o teto e recusado
+      // antes de virar linha no banco — o custo e barrado na porta, nao depois.
+      if (org.appliances_atuais > org.max_appliances) {
+        return NextResponse.json(
+          { error: `Limite do plano excedido: ${org.appliances_atuais}/${org.max_appliances} appliances.` },
+          { status: 402 },
+        );
+      }
     }
 
     // 2. Inserir ou Atualizar o status do hardware (AGORA REFERENCIANDO appliance_id)

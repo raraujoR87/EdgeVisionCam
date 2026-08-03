@@ -41,6 +41,22 @@ function extrairSessao(request: Request): TokenPayload | null {
 
 
 
+
+/** Teto de paginação. `?limit=999999` viraria varredura que trava o banco de
+ *  todos os inquilinos — o custo de um cliente recai sobre os outros. */
+const LIMITE_PADRAO = 50;
+const LIMITE_MAXIMO = 200;
+
+function paginacao(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const bruto = Number(searchParams.get('limit')) || LIMITE_PADRAO;
+  return {
+    limite: Math.min(Math.max(bruto, 1), LIMITE_MAXIMO),
+    offset: Math.max(Number(searchParams.get('offset')) || 0, 0),
+    termo: (searchParams.get('q') || '').trim(),
+  };
+}
+
 function semSessao() {
   return NextResponse.json({ error: 'Não autenticado.' }, { status: 401 });
 }
@@ -71,7 +87,18 @@ export async function GET(request: Request) {
   if (!sessao) return semSessao();
 
   try {
-    const lojas = await comInquilino(contextoDoToken(sessao), async (cliente) => {
+    const { limite, offset, termo } = paginacao(request);
+
+    const resultado = await comInquilino(contextoDoToken(sessao), async (cliente) => {
+      // A busca vai parametrizada: um termo com % ou _ e tratado como texto,
+      // nao como curinga que varreria a tabela inteira.
+      const filtro = termo ? 'WHERE s.name ILIKE $1' : '';
+      const params: any[] = termo ? [`%${termo}%`] : [];
+
+      const total = await cliente.query(
+        `SELECT COUNT(*)::int AS n FROM stores s ${filtro}`, params);
+
+      params.push(limite, offset);
       const res = await cliente.query(`
         SELECT s.*,
                o.name AS organization_name,
@@ -80,11 +107,15 @@ export async function GET(request: Request) {
                COALESCE((SELECT COUNT(*) FROM events e WHERE e.store_id = s.id), 0)::integer AS event_count
           FROM stores s
           LEFT JOIN organizations o ON o.id = s.organization_id
+          ${filtro}
          ORDER BY o.name NULLS LAST, s.name
-      `);
-      return res.rows;
+         LIMIT $${params.length - 1} OFFSET $${params.length}
+      `, params);
+      return { lojas: res.rows, total: total.rows[0].n };
     });
-    return NextResponse.json(lojas);
+    // Envelope em vez de array cru: sem o total, a UI nao sabe quantas paginas
+    // existem e a paginacao vira adivinhacao.
+    return NextResponse.json({ ...resultado, limite, offset });
   } catch (erro: any) {
     console.error('[stores GET]', erro);
     return NextResponse.json({ error: 'Falha ao listar lojas.' }, { status: 500 });
