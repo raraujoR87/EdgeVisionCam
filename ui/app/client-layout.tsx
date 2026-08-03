@@ -1,7 +1,7 @@
 "use client"
 import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server, Store, HardDrive, BarChart3, Users, Cog } from 'lucide-react'
+import { Shield, LayoutDashboard, Target, Settings, LogOut, Loader2, ExternalLink, Server, Store, HardDrive, BarChart3, Users, Cog, Building2, ScrollText } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import { getApiUrl } from './utils/api'
 
@@ -76,7 +76,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   // Redirecionamento de segurança para Clientes
   useEffect(() => {
     if (user && ['client', 'STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER'].includes(user.role)) {
-      const isTryingToAccessAdminPages = pathname === '/' || pathname === '/setup' || pathname === '/settings' || pathname === '/dashboard' || pathname === '/dashboard/stores' || pathname === '/dashboard/appliances' || pathname === '/dashboard/deploys';
+      const isTryingToAccessAdminPages = pathname === '/' || pathname === '/setup' || pathname === '/settings' || pathname === '/dashboard' || pathname === '/dashboard/stores' || pathname === '/dashboard/appliances' || pathname === '/dashboard/deploys' || pathname === '/dashboard/organizations' || pathname === '/dashboard/audit';
       
       if (isTryingToAccessAdminPages) {
         window.location.href = '/dashboard/events'
@@ -128,9 +128,13 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
                 <LayoutDashboard size={20} />
                 <span className="font-medium">Painel Central</span>
               </Link>
+              <Link href="/dashboard/organizations" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/organizations' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <Building2 size={20} />
+                <span className="font-medium">Clientes</span>
+              </Link>
               <Link href="/dashboard/stores" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/stores' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Store size={20} />
-                <span className="font-medium">Lojas & Clientes</span>
+                <span className="font-medium">Lojas</span>
               </Link>
               <Link href="/dashboard/deploys" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/deploys' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <Server size={20} />
@@ -144,6 +148,10 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
           ) : user && ['STORE_ADMIN', 'STORE_OPERATOR', 'STORE_VIEWER', 'client'].includes(user.role) && isCloudMode ? (
             // Sidebar para Clientes (Painel BI e Gestão da Loja)
             <>
+              <Link href="/dashboard/audit" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/audit' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                <ScrollText size={20} />
+                <span className="font-medium">Auditoria</span>
+              </Link>
               <Link href="/dashboard/analytics" className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${pathname === '/dashboard/analytics' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
                 <BarChart3 size={20} />
                 <span className="font-medium">BI & Analytics</span>
