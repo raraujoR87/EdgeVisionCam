@@ -26,6 +26,10 @@ ROTAS_DE_INQUILINO = [
     "analytics/route.ts",
     "organizations/route.ts",
     "audit/route.ts",
+    # A fila de comandos é acessada por sessão e diz qual loja foi reiniciada.
+    # O lado do appliance (edge/commands) fica fora: autentica por edge_key,
+    # como a ingestão.
+    "commands/route.ts",
 ]
 
 

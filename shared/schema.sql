@@ -33,6 +33,39 @@ CREATE TABLE IF NOT EXISTS appliances (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 1.6 Fila de comandos remotos (console -> appliance)
+--
+-- O appliance vive atrás do NAT da loja: não há rota da nuvem até ele, então o
+-- console enfileira aqui e o appliance puxa no mesmo loop em que já manda
+-- telemetria. Ver ui/app/api/edge/commands/route.ts.
+--
+-- Cada linha é uma ordem, não um estado desejado. Guardar o histórico — em vez
+-- de sobrescrever um campo "último comando" — é o que permite responder "quem
+-- mandou reiniciar a loja 12 às 3h da manhã?".
+CREATE TABLE IF NOT EXISTS appliance_commands (
+    id BIGSERIAL PRIMARY KEY,
+    appliance_id INTEGER NOT NULL REFERENCES appliances(id) ON DELETE CASCADE,
+    comando VARCHAR(50) NOT NULL,
+    parametros JSONB,
+    -- PENDENTE -> ENTREGUE -> CONCLUIDO | FALHOU | SEM_RESPOSTA
+    --          -> CANCELADO | EXPIRADO
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDENTE',
+    resultado JSONB,
+    issued_by INTEGER,
+    issued_email VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    -- Um comando enfileirado enquanto a loja estava sem internet não deve
+    -- executar dois dias depois: o operador já tomou outra decisão.
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW() + INTERVAL '15 minutes',
+    delivered_at TIMESTAMP WITH TIME ZONE,
+    completed_at TIMESTAMP WITH TIME ZONE
+);
+
+-- A consulta quente é "o que está pendente para este appliance", feita a cada
+-- poll de cada appliance da frota.
+CREATE INDEX IF NOT EXISTS idx_commands_fila
+    ON appliance_commands(appliance_id, status, created_at);
+
 -- 2. Tabela de Eventos de Ocultação/Furtos Suspeitos
 CREATE TABLE IF NOT EXISTS events (
     id SERIAL PRIMARY KEY,

@@ -1,8 +1,9 @@
 "use client"
 import React, { useState } from 'react'
 import useSWR from 'swr'
-import { Server, Plus, Copy, Check, Ban, Loader2, AlertTriangle, Clock } from 'lucide-react'
+import { Server, Plus, Copy, Check, Ban, Loader2, AlertTriangle, Clock, Radio } from 'lucide-react'
 import { classificarLoja, APARENCIA } from '../fleet'
+import ControleRemoto from './controle-remoto'
 
 /**
  * Gerenciamento de deploys da frota.
@@ -42,6 +43,10 @@ export default function GerenciarDeploys() {
   const [criando, setCriando] = useState(false)
   const [copiado, setCopiado] = useState<number | null>(null)
   const [erro, setErro] = useState('')
+  // Appliance cujo painel de controle remoto está aberto. Um por vez, de
+  // propósito: vários painéis abertos convidam a clicar no da linha errada, e
+  // aqui a linha errada é uma loja que fica sem detecção.
+  const [comandando, setComandando] = useState<Appliance | null>(null)
   const [form, setForm] = useState({ store_id: '', label: '', target_version: 'latest', edge_key: '' })
 
   const appliances: Appliance[] = data?.appliances || []
@@ -308,7 +313,19 @@ export default function GerenciarDeploys() {
                           </span>
                         )}
                       </td>
-                      <td className="p-5 text-right">
+                      <td className="p-5 text-right whitespace-nowrap">
+                        {a.status === 'ATIVO' && (
+                          <button
+                            onClick={() => setComandando(comandando?.id === a.id ? null : a)}
+                            className={`text-xs inline-flex items-center gap-1 mr-4 ${
+                              comandando?.id === a.id
+                                ? 'text-blue-400'
+                                : 'text-slate-500 hover:text-blue-400'
+                            }`}
+                          >
+                            <Radio size={12} /> Comandar
+                          </button>
+                        )}
                         {a.status !== 'REVOGADO' && (
                           <button
                             onClick={() => revogar(a)}
@@ -326,6 +343,30 @@ export default function GerenciarDeploys() {
           </div>
         )}
       </div>
+
+      {/* Controle remoto do appliance selecionado */}
+      {comandando && (
+        !comandando.tem_edge_key ? (
+          // Sem edge_key o appliance não tem como se autenticar na fila: ele
+          // nunca vai buscar o comando. Dizer isso aqui evita o operador clicar
+          // e ficar olhando para um PENDENTE que só vence.
+          <div className="bg-amber-950/20 border border-amber-800/30 rounded-2xl p-6 text-sm text-amber-300/80 flex items-start gap-3">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <div>
+              <strong className="font-bold">{comandando.store_name}</strong> não tem Edge key.
+              É ela que identifica o appliance ao buscar a fila de comandos — sem ela, nada
+              enfileirado aqui chega até a placa. Emita um novo provisionamento com a Edge key
+              preenchida.
+            </div>
+          </div>
+        ) : (
+          <ControleRemoto
+            applianceId={comandando.id}
+            nomeDaLoja={comandando.store_name}
+            aoFechar={() => setComandando(null)}
+          />
+        )
+      )}
     </div>
   )
 }

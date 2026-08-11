@@ -207,6 +207,26 @@ ALTER TABLE appliances    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE events        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log     ENABLE ROW LEVEL SECURITY;
 
+-- A fila de comandos remotos, quando existir. É dado de cliente como os
+-- demais: diz qual loja foi reiniciada e quando. O bloco condicional existe
+-- porque esta migração roda em bancos que ainda não receberam a tabela — e
+-- falhar aqui abortaria o resto do isolamento.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'appliance_commands') THEN
+        EXECUTE 'ALTER TABLE appliance_commands ENABLE ROW LEVEL SECURITY';
+        EXECUTE 'DROP POLICY IF EXISTS command_isolamento ON appliance_commands';
+        EXECUTE $politica$
+            CREATE POLICY command_isolamento ON appliance_commands
+                USING (app_is_super_admin() OR appliance_id IN (
+                    SELECT a.id FROM appliances a
+                      JOIN stores s ON s.id = a.store_id
+                     WHERE s.organization_id IN (SELECT app_orgs_permitidas())
+                ))
+        $politica$;
+    END IF;
+END $$;
+
 DROP POLICY IF EXISTS org_isolamento ON organizations;
 CREATE POLICY org_isolamento ON organizations
     USING (app_is_super_admin() OR id IN (SELECT app_orgs_permitidas()));

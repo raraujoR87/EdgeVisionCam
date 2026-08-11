@@ -160,6 +160,63 @@ def test_super_admin_enxerga_todos(cenario):
     assert cur.fetchone()[0] == 2
 
 
+def _appliance_de(cur, slug, chave):
+    """Cria um appliance na loja da organização indicada e devolve seu id."""
+    cur.execute(
+        """INSERT INTO appliances (store_id, label, edge_key, status)
+           VALUES ((SELECT s.id FROM stores s
+                      JOIN organizations o ON o.id = s.organization_id
+                     WHERE o.slug = %s), 'caixa-01', %s, 'ATIVO')
+           RETURNING id""",
+        (slug, chave),
+    )
+    return cur.fetchone()[0]
+
+
+def test_comando_de_um_cliente_e_invisivel_ao_outro(cenario):
+    """
+    A fila de comandos diz qual loja foi reiniciada e quando — é operação
+    interna do concorrente, com a agravante de ser acionável: quem enxerga a
+    fila alheia sabe qual appliance está instável e quando ninguém está olhando.
+    """
+    cur, user_a, _ = cenario
+    id_beta = _appliance_de(cur, 't-beta', 'k-edge-beta')
+    cur.execute(
+        """INSERT INTO appliance_commands (appliance_id, comando, issued_email)
+           VALUES (%s, 'reiniciar_engine', 'b@t.local')""",
+        (id_beta,),
+    )
+
+    como(cur, user_a)
+    cur.execute("SELECT count(*) FROM appliance_commands")
+    assert cur.fetchone()[0] == 0, "leu a fila de comandos de outro inquilino"
+
+
+def test_nao_da_para_comandar_appliance_alheio(cenario):
+    """
+    O que a RLS precisa impedir aqui não é leitura de dado: é a rota de
+    comandos inserir para um appliance de outro cliente. Sem a política, um
+    `appliance_id` trocado na requisição reiniciaria a loja do concorrente.
+    """
+    cur, user_a, _ = cenario
+    id_beta = _appliance_de(cur, 't-beta', 'k-edge-beta-2')
+
+    como(cur, user_a)
+
+    # A rota faz um SELECT no appliance antes de inserir. É esse SELECT que
+    # volta vazio — e é por isso que a inserção nunca chega a acontecer.
+    cur.execute("SELECT count(*) FROM appliances WHERE id = %s", (id_beta,))
+    assert cur.fetchone()[0] == 0, "enxergou o appliance de outro inquilino"
+
+    # E mesmo pulando a checagem da aplicação, a escrita não passa: a política
+    # vale para INSERT tanto quanto para SELECT.
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        cur.execute(
+            "INSERT INTO appliance_commands (appliance_id, comando) VALUES (%s, 'reiniciar_engine')",
+            (id_beta,),
+        )
+
+
 def test_auditoria_de_um_cliente_e_invisivel_ao_outro(cenario):
     """Trilha vazada expõe a operação interna do concorrente."""
     cur, user_a, user_b = cenario

@@ -141,6 +141,14 @@ services:
       - FRIGATE_URL=http://frigate:5000
       - MQTT_HOST=mqtt
       - CLOUD_API_URL=${CLOUD_API_URL:-https://api.visioncam.com.br/v1}
+      # Identidade do appliance na nuvem. O provisionamento já gravava as duas
+      # no .env, mas elas nunca eram repassadas ao container: `${VAR}` no
+      # Compose só substitui texto no YAML, não cria variável de ambiente
+      # dentro do serviço. O efeito era silencioso — core/graph/agent.py
+      # "prioriza o EDGE_KEY" e sempre caía no valor do banco, e o poll de
+      # comandos remotos não teria com que se autenticar.
+      - EDGE_KEY=${EDGE_KEY:-}
+      - STORE_API_KEY=${STORE_API_KEY:-}
       - TZ=${TZ:-America/Sao_Paulo}
       # Fala com o Docker pelo proxy restrito, não pelo socket do host.
       - DOCKER_PROXY_HOST=docker-socket-proxy

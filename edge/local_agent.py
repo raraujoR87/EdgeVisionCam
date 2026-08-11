@@ -819,8 +819,56 @@ class LocalAgent:
                     
             except Exception as e:
                 print(f"  [TELEMETRIA ERR] {e}")
-                
+
             await asyncio.sleep(10)
+
+    async def commands_poller_loop(self):
+        """
+        Puxa e executa comandos remotos enfileirados no console.
+
+        Separado do loop de telemetria por duas razões. A primeira é a cadência:
+        telemetria é barata e vai de dez em dez segundos; um comando pode
+        reiniciar container, e não deve ficar preso ao mesmo relógio. A segunda
+        é a condição — a telemetria só sobe com `model_source = cloud`, porque é
+        sobre onde a inferência acontece. Gestão de frota não é: um appliance
+        que roda tudo local ainda precisa ser reiniciado à distância quando
+        trava, senão alguém pega o carro.
+
+        A execução roda em thread separada de propósito. `docker_client` fala
+        HTTP cru sobre socket bloqueante, e chamá-lo direto na corrotina
+        travaria o loop de eventos do agente — a detecção pararia durante um
+        restart do Frigate.
+        """
+        from edge import remote_commands
+
+        print("  [COMANDOS] Loop de comandos remotos iniciado.")
+        while True:
+            try:
+                from core.database.db import get_system_db
+                db_sys = await get_system_db()
+                cursor = await db_sys.execute(
+                    "SELECT key, value FROM config WHERE key IN ('cloud_api_url', 'edge_key')"
+                )
+                rows = await cursor.fetchall()
+                config = {r['key']: r['value'] for r in rows}
+                await db_sys.close()
+
+                cloud_url = config.get("cloud_api_url") or os.getenv("CLOUD_API_URL")
+                # Só a edge_key, sem cair para a store_api_key como a telemetria
+                # faz. A chave da loja é compartilhada entre appliances: com ela
+                # aceita aqui, um appliance consumiria o comando destinado a
+                # outro. A nuvem recusa por esse mesmo motivo.
+                edge_key = config.get("edge_key") or os.getenv("EDGE_KEY")
+
+                if cloud_url and edge_key:
+                    loop = asyncio.get_event_loop()
+                    await loop.run_in_executor(
+                        None, remote_commands.processar_rodada, cloud_url, edge_key
+                    )
+            except Exception as e:
+                print(f"  [COMANDOS ERR] {e}")
+
+            await asyncio.sleep(15)
 
     async def run(self):
         """Main event loop."""
@@ -829,6 +877,8 @@ class LocalAgent:
         print(f"  [AGENTE] Abaixo do threshold = CLEARED (sem Gemini)")
         # Inicia o loop de telemetria
         asyncio.create_task(self.telemetry_sender_loop())
+        # ... e o de comandos remotos vindos do console.
+        asyncio.create_task(self.commands_poller_loop())
         while True:
             try:
                 event = await asyncio.wait_for(self.event_queue.get(), timeout=1.0)
